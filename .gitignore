@@ -1,0 +1,6 @@
+venv/
+__pycache__/
+*.pyc
+.env
+mediacao.db
+.DS_Store

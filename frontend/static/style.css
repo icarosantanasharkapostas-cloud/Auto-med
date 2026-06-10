@@ -1,0 +1,26 @@
+body {
+    -webkit-font-smoothing: antialiased;
+}
+
+.card {
+    transition: all 0.3s ease;
+}
+
+.table-hover tbody tr:hover {
+    color: #fff;
+    background-color: rgba(255, 255, 255, 0.05);
+}
+
+#logs-container::-webkit-scrollbar {
+    width: 8px;
+}
+#logs-container::-webkit-scrollbar-track {
+    background: #212529; 
+}
+#logs-container::-webkit-scrollbar-thumb {
+    background: #495057; 
+    border-radius: 4px;
+}
+#logs-container::-webkit-scrollbar-thumb:hover {
+    background: #6c757d; 
+}
