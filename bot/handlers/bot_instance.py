@@ -18,10 +18,17 @@ class MediacaoBot(discord.Client):
         # Utilizar args do discord-py-self
         super().__init__()
         self.db_client_id = client_data.get("id")
-        self.client_name = client_data.get("nome")
+        self.client_name = client_data.get("nome") or "SemNome"
         
         # Configurações do cliente
-        self.config = client_data.get("config_json", {})
+        # IMPORTANTE: se "config_json" vier None do banco de dados,
+        # o .get("config_json", {}) ainda retorna None (pois a chave existe).
+        # Por isso usamos "or {}" para garantir que SEMPRE seja um dicionário. 🛡️
+        self.config = client_data.get("config_json") or {}
+        if not isinstance(self.config, dict):
+            # Se por algum motivo não for um dicionário, forçamos um dicionário vazio
+            self.config = {}
+        
         self.email = client_data.get("email")
         self.email_senha = client_data.get("senha_email")
         
@@ -29,18 +36,97 @@ class MediacaoBot(discord.Client):
         self.db_session_factory = db_session_factory
         self.rate_limiter = RateLimiter(actions_per_minute=20)
         
-        self.prefix = self.config.get("prefix", "!")
+        # Configurações com valores padrão (nunca ficam None) ✅
+        self.prefix = self.config.get("prefix") or "!"
         self.categoria_id = self.config.get("categoria_id") # Categoria onde as salas são criadas
         self.cargo_mediador_id = self.config.get("cargo_mediador_id")
+        
+        # Valores padrão extras para evitar erros de "NoneType" 🛡️
+        self.palavras_chave_canal = self.config.get("palavras_chave_canal") or ["fila", "filas", "partidas", "pagar"]
+        self.valor_fila_padrao = self.config.get("valor_fila_padrao") or 5.50
+        self.nome_recebedor_pix = self.config.get("nome_recebedor_pix") or ""
+        
+        # 🐞 LOGS DE DEPURAÇÃO: mostram o valor de cada configuração ao iniciar
+        # Isso ajuda a descobrir QUAL variável está vindo vazia (None)
+        print("=" * 50)
+        print(f"🤖 Inicializando bot do cliente: {self.client_name}")
+        print(f"🔎 [DEBUG] config: {self.config}")
+        print(f"🔎 [DEBUG] prefix: {self.prefix}")
+        print(f"🔎 [DEBUG] categoria_id: {self.categoria_id}")
+        print(f"🔎 [DEBUG] cargo_mediador_id: {self.cargo_mediador_id}")
+        print(f"🔎 [DEBUG] palavras_chave_canal: {self.palavras_chave_canal}")
+        print(f"🔎 [DEBUG] valor_fila_padrao: {self.valor_fila_padrao}")
+        print(f"🔎 [DEBUG] nome_recebedor_pix: '{self.nome_recebedor_pix}'")
+        print("=" * 50)
 
     async def start(self, token: str):
-        # We need to wrap it since start is blocking
-        try:
-            await super().start(token)
-        except Exception as e:
-            self.logger.error(f"Error in bot start: {e}")
-            import traceback
-            traceback.print_exc()
+        # Função responsável por LIGAR o bot e conectar ao Discord 🔌
+        # Aqui validamos tudo ANTES de chamar o Discord, para evitar o erro
+        # "'NoneType' object is not iterable".
+
+        # 1️⃣ Validação do TOKEN (a causa mais comum de erros ao iniciar) 🔑
+        print(f"🚀 [DEBUG] Tentando iniciar o bot '{self.client_name}'...")
+        if token is None:
+            msg = "❌ ERRO: O token do bot está VAZIO (None). Verifique o cadastro do cliente no banco de dados!"
+            self.logger.error(msg)
+            self._log_to_db("error", msg)
+            print(msg)
+            return
+
+        if not isinstance(token, str):
+            msg = f"❌ ERRO: O token precisa ser um texto (str), mas veio como {type(token).__name__}."
+            self.logger.error(msg)
+            self._log_to_db("error", msg)
+            print(msg)
+            return
+
+        token = token.strip()
+        if token == "":
+            msg = "❌ ERRO: O token do bot está em branco. Cadastre um token válido para este cliente!"
+            self.logger.error(msg)
+            self._log_to_db("error", msg)
+            print(msg)
+            return
+
+        print(f"🔑 [DEBUG] Token recebido (tamanho: {len(token)} caracteres). Conectando...")
+
+        # 2️⃣ Tentativa de conexão com RETENTATIVAS (retry) 🔁
+        # O erro "'NoneType' object is not iterable" muitas vezes acontece porque
+        # a biblioteca discord.py-self busca informações em sites externos
+        # (build number / propriedades do navegador) e essa busca pode FALHAR
+        # de forma temporária por causa da internet. Por isso tentamos algumas vezes.
+        max_tentativas = 3
+        for tentativa in range(1, max_tentativas + 1):
+            try:
+                print(f"🔄 [DEBUG] Tentativa {tentativa} de {max_tentativas} de conexão...")
+                await super().start(token)
+                # Se chegou aqui sem erro, deu tudo certo ✅
+                return
+            except TypeError as e:
+                # Erro típico de "NoneType is not iterable" (dado None vindo de site externo)
+                msg = (f"⚠️ Tentativa {tentativa} falhou (erro de dados nulos): {e}. "
+                       f"Isso geralmente é instabilidade temporária do Discord/internet.")
+                self.logger.error(msg)
+                print(msg)
+                traceback.print_exc()
+                if tentativa < max_tentativas:
+                    print("⏳ Aguardando 5 segundos antes de tentar novamente...")
+                    await asyncio.sleep(5)
+                else:
+                    erro_final = (f"❌ Não foi possível conectar o bot '{self.client_name}' "
+                                  f"após {max_tentativas} tentativas. Erro: {e}")
+                    self.logger.error(erro_final)
+                    self._log_to_db("error", erro_final)
+                    print(erro_final)
+            except Exception as e:
+                # Qualquer outro erro (token inválido, sem internet, etc.)
+                erro_final = f"❌ Erro ao iniciar o bot '{self.client_name}': {type(e).__name__}: {e}"
+                self.logger.error(erro_final)
+                self._log_to_db("error", erro_final)
+                print(erro_final)
+                traceback.print_exc()
+                # Esses erros normalmente não se resolvem tentando de novo, então paramos
+                return
 
     async def on_ready(self):
         self.logger.info(f"Bot {self.client_name} logado como {self.user}!")
