@@ -28,6 +28,9 @@ PyJWT==2.9.0
 # ----- Discord (self-bot) -----
 discord.py-self==2.0.0
 aiohttp==3.10.10
+# O modulo 'audioop' foi REMOVIDO do Python 3.13. O discord.py precisa dele,
+# entao instalamos a versao "audioop-lts" (substituta). So instala no 3.13+.
+audioop-lts==0.2.1 ; python_version >= "3.13"
 
 # ----- E-mail (leitura via IMAP) -----
 imap-tools==1.7.4
