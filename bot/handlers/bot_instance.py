@@ -284,30 +284,38 @@ class MediacaoBot(discord.Client):
 
     async def cmd_verificar_pix(self, message):
         """!verificar_pix Nome Do Jogador Valor"""
+        print(f"🔍 [VERIFICAR_PIX] Comando recebido: '{message.content[:100]}'")
+
         if not self.email or not self.email_senha:
+            print(f"⚠️ [VERIFICAR_PIX] E-mail não configurado para este cliente. Abortando.")
             await AntiDetectionUtils.natural_action(message.reply, "E-mail não configurado.")
             return
 
         partes = message.content.split(' ', 1)
         if len(partes) < 2:
+             print(f"⚠️ [VERIFICAR_PIX] Formato inválido (faltam argumentos).")
              await AntiDetectionUtils.natural_action(message.reply, "Formato: !verificar_pix Nome valor")
              return
              
         # Tenta extrair o último termo como valor, e os anteriores como nome
         argumentos = partes[1].split()
         if len(argumentos) < 2:
+            print(f"⚠️ [VERIFICAR_PIX] Faltam nome e/ou valor. Abortando.")
             return
             
         valor = argumentos[-1]
         nome = " ".join(argumentos[:-1])
+        print(f"✅ [VERIFICAR_PIX] Nome extraído: '{nome}' | Valor extraído: '{valor}'")
         
         await AntiDetectionUtils.natural_action(message.reply, f"Verificando e-mail por Pix de '{nome}' no valor de R${valor}...")
         
         def run_sync_gmail():
              return GmailService.check_payment_email(self.email, self.email_senha, nome, valor)
-             
+
+        print(f"🔍 [VERIFICAR_PIX] Iniciando busca no Gmail (em segundo plano)...")
         loop = asyncio.get_event_loop()
         resultado = await loop.run_in_executor(None, run_sync_gmail)
+        print(f"✅ [VERIFICAR_PIX] Busca no Gmail concluída. Encontrou pagamento? {'SIM' if resultado else 'NÃO'}")
         
         if resultado:
              await AntiDetectionUtils.natural_action(
@@ -325,35 +333,74 @@ class MediacaoBot(discord.Client):
              )
 
     async def check_comprovante_print(self, message):
-        """Verifica se a imagem é um comprovante usando OCR."""
-        # Apenas processa se estiver numa sala "fila-*"
-        if not message.channel.name.startswith("fila-"):
-            return
-            
-        image_url = message.attachments[0].url
-        if not image_url.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
-            return
+        """Verifica se a imagem é um comprovante usando OCR.
+        🔍 ESTE MÉTODO TEM LOGS DETALHADOS EM CADA ETAPA para descobrir
+        exatamente onde o processamento trava ou para."""
+        try:
+            canal_nome = getattr(message.channel, "name", "DM/privado")
+            print(f"🔍 [COMPROVANTE] Iniciando análise no canal: #{canal_nome}")
 
-        await AntiDetectionUtils.natural_action(
-             message.reply,
-             "Analisando comprovante..."
-        )
-        
-        # Executar OCR
-        text = await OCRService.extract_text_from_image_url(image_url)
-        if not text:
-            await AntiDetectionUtils.natural_action(message.channel.send, "Não consegui ler o comprovante.")
-            return
-            
-        # Usamos uma string de 'sucesso' padrao ou verificamos se tem PIX/Transação
-        if "comprovante" in text.lower() or "pix" in text.lower() or "transferência" in text.lower():
-            # Aprovado via print
+            # Etapa 1: Verificar se está numa sala "fila-*"
+            if not canal_nome.startswith("fila-"):
+                print(f"⏭️ [COMPROVANTE] Canal '#{canal_nome}' NÃO começa com 'fila-'. Ignorando imagem. "
+                      f"(Comprovantes só são analisados em salas que começam com 'fila-')")
+                return
+            print(f"✅ [COMPROVANTE] Canal válido (começa com 'fila-').")
+
+            # Etapa 2: Verificar a extensão da imagem
+            image_url = message.attachments[0].url
+            print(f"🔗 [COMPROVANTE] URL da imagem: {image_url[:120]}")
+            if not image_url.lower().split('?')[0].endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                print(f"⏭️ [COMPROVANTE] O anexo NÃO é uma imagem suportada (.png/.jpg/.jpeg/.webp). Ignorando.")
+                return
+            print(f"✅ [COMPROVANTE] Anexo é uma imagem suportada.")
+
+            # Etapa 3: Avisar que está analisando
+            print(f"💬 [COMPROVANTE] Enviando mensagem 'Analisando comprovante...'")
             await AntiDetectionUtils.natural_action(
-                message.reply,
-                "✅ Comprovante reconhecido pelo sistema (OCR)!"
+                 message.reply,
+                 "Analisando comprovante..."
             )
-            self._log_to_db("success", f"Comprovante reconhecido no canal {message.channel.name}")
-            self._salvar_pagamento(message.author.name, "0", str(message.channel.id)) # Pode refinar para extrair valor depois
+            print(f"✅ [COMPROVANTE] Mensagem 'Analisando...' enviada.")
+
+            # Etapa 4: Executar OCR (lê o texto da imagem)
+            print(f"🔍 [COMPROVANTE] Iniciando OCR (leitura do texto da imagem)...")
+            text = await OCRService.extract_text_from_image_url(image_url)
+            print(f"✅ [COMPROVANTE] OCR concluído. Caracteres extraídos: {len(text) if text else 0}")
+            if text:
+                print(f"📄 [COMPROVANTE] Prévia do texto lido (200 primeiros chars): '{text[:200]}'")
+
+            if not text:
+                print(f"⚠️ [COMPROVANTE] OCR não retornou texto. Avisando o usuário.")
+                await AntiDetectionUtils.natural_action(message.channel.send, "Não consegui ler o comprovante.")
+                return
+
+            # Etapa 5: Verificar palavras-chave de comprovante
+            texto_min = text.lower()
+            print(f"🔍 [COMPROVANTE] Procurando palavras-chave (comprovante/pix/transferência) no texto...")
+            if "comprovante" in texto_min or "pix" in texto_min or "transferência" in texto_min or "transferencia" in texto_min:
+                print(f"✅ [COMPROVANTE] Palavra-chave ENCONTRADA! Aprovando comprovante.")
+                await AntiDetectionUtils.natural_action(
+                    message.reply,
+                    "✅ Comprovante reconhecido pelo sistema (OCR)!"
+                )
+                self._log_to_db("success", f"Comprovante reconhecido no canal {canal_nome}")
+                print(f"💾 [COMPROVANTE] Salvando pagamento no banco de dados...")
+                self._salvar_pagamento(message.author.name, "0", str(message.channel.id)) # Pode refinar para extrair valor depois
+                print(f"✅ [COMPROVANTE] Pagamento salvo. Processo concluído com sucesso! 🎉")
+            else:
+                print(f"❌ [COMPROVANTE] Nenhuma palavra-chave de comprovante encontrada no texto lido.")
+                await AntiDetectionUtils.natural_action(
+                    message.channel.send,
+                    "⚠️ Não reconheci este print como um comprovante de Pix."
+                )
+        except Exception as e:
+            # Captura QUALQUER erro inesperado e mostra o traceback completo
+            self.logger.error(f"❌ Erro em check_comprovante_print: {str(e)}")
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            print(f"❌ [COMPROVANTE] ERRO inesperado: {str(e)}")
+            print(traceback.format_exc())
+            self._log_to_db("error", f"Erro ao analisar comprovante: {str(e)}")
 
     def _salvar_pagamento(self, nome, valor, canal_id):
         try:

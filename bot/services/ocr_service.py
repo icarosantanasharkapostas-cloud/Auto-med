@@ -27,33 +27,54 @@ _OCR_LANG = "por"
 class OCRService:
     @staticmethod
     async def extract_text_from_image_url(url: str) -> str:
-        """Faz o download da imagem e extrai o texto com OCR (Tesseract)."""
+        """Faz o download da imagem e extrai o texto com OCR (Tesseract).
+        🔍 Com logs detalhados em cada etapa para facilitar o debug."""
+        # Etapa 0: Verificar se o OCR está disponível
         if not _OCR_DISPONIVEL:
-            logger.error("pytesseract/Pillow não estão disponíveis.")
+            logger.error("❌ [OCR] pytesseract/Pillow NÃO estão disponíveis. OCR desativado.")
+            print("❌ [OCR] pytesseract/Pillow NÃO estão instalados! Verifique o requirements.txt e o tesseract-ocr.")
             return ""
 
         try:
+            # Etapa 1: Baixar a imagem
+            print(f"🔍 [OCR] Iniciando download da imagem...")
             async with aiohttp.ClientSession() as session:
                 async with session.get(url) as response:
+                    print(f"🔍 [OCR] Status do download: {response.status}")
                     if response.status == 200:
                         image_bytes = await response.read()
-                        image = Image.open(io.BytesIO(image_bytes))
+                        print(f"✅ [OCR] Imagem baixada, tamanho: {len(image_bytes)} bytes")
 
+                        # Etapa 2: Abrir a imagem com Pillow
+                        print(f"🔍 [OCR] Abrindo imagem com Pillow...")
+                        image = Image.open(io.BytesIO(image_bytes))
+                        print(f"✅ [OCR] Imagem aberta. Formato: {image.format}, Tamanho: {image.size}")
+
+                        # Etapa 3: Rodar o Tesseract (OCR)
+                        print(f"🔍 [OCR] Iniciando OCR com Tesseract (idioma: '{_OCR_LANG}')...")
                         try:
                             text = pytesseract.image_to_string(image, lang=_OCR_LANG)
-                        except pytesseract.TesseractError:
+                        except pytesseract.TesseractError as te:
                             # Fallback para ingles caso o idioma 'por' nao exista
                             logger.warning(
                                 "Idioma '%s' indisponível no Tesseract; usando 'eng'.",
                                 _OCR_LANG,
                             )
+                            print(f"⚠️ [OCR] Idioma 'por' indisponível ({te}). Tentando com 'eng'...")
                             text = pytesseract.image_to_string(image, lang="eng")
 
-                        return text.strip()
+                        text = text.strip()
+                        print(f"✅ [OCR] OCR concluído, texto extraído: {len(text)} caracteres")
+                        return text
+                    else:
+                        print(f"❌ [OCR] Falha no download da imagem (status {response.status}).")
 
             return ""
         except Exception as e:
             logger.error(f"Erro no OCR: {str(e)}")
+            print(f"❌ [OCR] ERRO durante o processamento: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
             return ""
 
     @staticmethod
