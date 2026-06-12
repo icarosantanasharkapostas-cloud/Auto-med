@@ -41,7 +41,9 @@ class MediacaoBot(discord.Client):
         
         self.logger = logging.getLogger(f"Bot-{self.client_name}")
         self.db_session_factory = db_session_factory
-        self.rate_limiter = RateLimiter(actions_per_minute=20)
+        # Limite de taxa REDUZIDO para no máximo 5 ações de ENVIO por minuto.
+        # Isso deixa o bot mais "humano" e evita ser detectado pelo Discord. 🐢
+        self.rate_limiter = RateLimiter(actions_per_minute=5)
         
         # Configurações com valores padrão (nunca ficam None) ✅
         self.prefix = self.config.get("prefix") or "!"
@@ -138,6 +140,13 @@ class MediacaoBot(discord.Client):
     async def on_ready(self):
         self.logger.info(f"Bot {self.client_name} logado como {self.user}!")
         self._log_to_db("info", f"Bot {self.client_name} online como {self.user}")
+        # 🟢 Log bem visível confirmando que o bot está pronto para receber mensagens
+        print("=" * 50)
+        print(f"🟢 BOT ONLINE: {self.user} (cliente: {self.client_name})")
+        print(f"👀 Prefixo dos comandos: '{self.prefix}'")
+        print(f"📡 Servidores conectados: {len(self.guilds)}")
+        print("✅ Aguardando mensagens... (vou logar cada uma que chegar)")
+        print("=" * 50)
 
     def _log_to_db(self, log_type: str, message: str):
         """Salva logs no banco de dados para a dashboard."""
@@ -153,29 +162,58 @@ class MediacaoBot(discord.Client):
             traceback.print_exc()
 
     async def on_message(self, message):
-        # Ignorar mensagens do próprio bot
+        # 📨 ESTE EVENTO É CHAMADO PARA CADA MENSAGEM QUE O BOT VÊ.
+        # OBS IMPORTANTE: como este é um "self-bot" (conta de usuário), ele recebe
+        # TODAS as mensagens automaticamente. A biblioteca discord.py-self NÃO usa
+        # "intents" (diferente de bots normais). Por isso o conteúdo das mensagens
+        # (message.content) sempre vem preenchido, sem precisar configurar nada. ✅
+
+        # Ignorar mensagens do próprio bot (senão ele responde a si mesmo) 🔁
         if message.author == self.user:
             return
 
+        # 🐞 LOG DETALHADO: mostra cada mensagem recebida (ajuda muito a debugar!)
+        try:
+            canal_nome = getattr(message.channel, "name", "DM/privado")
+            conteudo = (message.content or "")[:100]  # mostra só os 100 primeiros caracteres
+            print(f"📨 [MSG] Canal: #{canal_nome} | Autor: {message.author} | Texto: '{conteudo}' | Anexos: {len(message.attachments)}")
+        except Exception as e:
+            print(f"⚠️ [MSG] Erro ao logar mensagem recebida: {e}")
+
+        # Processa a mensagem em segundo plano (não trava o bot) ⚙️
         asyncio.create_task(self.process_message(message))
 
     async def process_message(self, message):
         try:
-            # Rate limiting check
-            await self.rate_limiter.wait_if_needed()
+            # ❌ IMPORTANTE: NÃO chamamos rate_limiter aqui!
+            # Antes, o bot aplicava limite de taxa em CADA mensagem RECEBIDA.
+            # Em canais movimentados isso criava uma fila gigante de esperas
+            # ("Rate limit atingido. Esperando Xs") e o bot ficava travado,
+            # sem responder aos comandos. ⛔
+            # Agora o limite de taxa só vale para as ações de ENVIO (responder),
+            # que é o que realmente importa para não ser detectado. ✅
 
-            if message.content.startswith(f"{self.prefix}criar_sala"):
+            conteudo = (message.content or "").strip()
+
+            # 🔎 Detecção de comandos
+            if conteudo.startswith(f"{self.prefix}criar_sala"):
+                print(f"✅ [CMD] Comando 'criar_sala' detectado de {message.author}")
+                self._log_to_db("info", f"Comando criar_sala recebido de {message.author}")
                 await self.cmd_criar_sala(message)
-                
-            elif message.content.startswith(f"{self.prefix}verificar_pix"):
+
+            elif conteudo.startswith(f"{self.prefix}verificar_pix"):
+                print(f"✅ [CMD] Comando 'verificar_pix' detectado de {message.author}")
+                self._log_to_db("info", f"Comando verificar_pix recebido de {message.author}")
                 await self.cmd_verificar_pix(message)
-                
-            # Verificar se é um comprovante em imagem
+
+            # 🖼️ Verificar se é um comprovante em imagem (print de Pix)
             if message.attachments:
+                print(f"🖼️ [IMG] Mensagem com {len(message.attachments)} anexo(s) — verificando se é comprovante...")
                 await self.check_comprovante_print(message)
-                
+
         except Exception as e:
             self.logger.error(f"Erro ao processar mensagem: {traceback.format_exc()}")
+            print(f"❌ [ERRO] Falha ao processar mensagem: {e}")
             self._log_to_db("error", f"Erro no bot: {str(e)}")
 
     async def cmd_criar_sala(self, message):

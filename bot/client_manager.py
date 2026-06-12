@@ -133,5 +133,23 @@ class ClientManager:
         finally:
             if session: session.close()
 
+    def is_running(self, client_id: int) -> bool:
+        """Verifica se um bot está rodando (online) ✅
+        Retorna True se o cliente estiver na lista de ativos e a conexão
+        com o Discord ainda estiver aberta. Nunca lança erro. 🛡️
+
+        OBS: este método estava FALTANDO e causava o erro
+        "'ClientManager' object has no attribute 'is_running'" na dashboard."""
+        try:
+            if client_id not in self.active_clients:
+                return False
+            bot = self.active_clients[client_id]
+            if bot is None:
+                return False
+            return not bot.is_closed()
+        except Exception as e:
+            logger.error(f"Erro ao checar is_running do cliente {client_id}: {e}")
+            return False
+
 # Instância global
 manager = ClientManager()

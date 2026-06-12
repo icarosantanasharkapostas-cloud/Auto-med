@@ -11,8 +11,9 @@ class AntiDetectionUtils:
     """
 
     @staticmethod
-    async def random_delay(min_sec: float = 0.5, max_sec: float = 2.0):
-        """Adiciona um atraso aleatório para simular tempo de reação humana."""
+    async def random_delay(min_sec: float = 2.0, max_sec: float = 5.0):
+        """Adiciona um atraso aleatório para simular tempo de reação humana.
+        Delays AUMENTADOS (2 a 5 segundos) para o bot parecer mais humano. 🧑"""
         delay = random.uniform(min_sec, max_sec)
         await asyncio.sleep(delay)
 
@@ -45,8 +46,8 @@ class AntiDetectionUtils:
         Uso:
         await AntiDetectionUtils.natural_action(channel.send, "Olá!")
         """
-        # Delay de reação inicial
-        await AntiDetectionUtils.random_delay(0.5, 1.5)
+        # Delay de reação inicial ANTES de responder (2 a 5s) — parece mais humano 🧑
+        await AntiDetectionUtils.random_delay(2.0, 5.0)
         
         # Simula tempo de digitação baseando-se no tamanho da mensagem (se for um send)
         content_length = 0
@@ -55,7 +56,7 @@ class AntiDetectionUtils:
         elif 'content' in kwargs and isinstance(kwargs['content'], str):
             content_length = len(kwargs['content'])
             
-        typing_time = min(5.0, max(1.0, content_length * 0.05)) # ~50ms por caractere, min 1s, max 5s
+        typing_time = min(8.0, max(2.0, content_length * 0.08)) # ~80ms por caractere, min 2s, max 8s
         
         # Obter o object (channel) da função se possível para chamar digitação
         channel = getattr(func.__self__, 'typing', None)
@@ -72,7 +73,9 @@ class AntiDetectionUtils:
 
 class RateLimiter:
     """Implementa limite de taxas para evitar spam e deteções de automação excessiva."""
-    def __init__(self, actions_per_minute: int = 15):
+    def __init__(self, actions_per_minute: int = 5):
+        # Máximo de 5 ações por minuto por padrão (antes era 15).
+        # Menos ações = menos chance de o Discord detectar automação. 🐢
         self.actions_per_minute = actions_per_minute
         self.action_timestamps = []
 
