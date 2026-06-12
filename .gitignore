@@ -1,6 +1,55 @@
+# ===================================================================
+# .gitignore — Arquivos que o Git deve IGNORAR (não enviar pro GitHub)
+# ===================================================================
+# 🔒 IMPORTANTE: Estes arquivos contêm segredos ou são gerados
+# automaticamente. NUNCA devem ir para o GitHub!
+# ===================================================================
+
+# ----- 🔑 Segredos e variáveis de ambiente (NUNCA enviar!) -----
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+# (O arquivo .env.example PODE ir pro GitHub, pois é só um modelo)
+!.env.example
+
+# ----- 🐍 Python -----
 venv/
+.venv/
+env/
+ENV/
 __pycache__/
 *.pyc
-.env
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# ----- 🗄️ Banco de dados local (não enviar dados locais) -----
 mediacao.db
+*.db
+*.sqlite
+*.sqlite3
+
+# ----- 📦 Node / Frontend -----
+node_modules/
+dist/
+build/
+.cache/
+
+# ----- 📝 Logs e arquivos temporários -----
+*.log
+logs/
+tmp/
+*.tmp
+
+# ----- 💻 Arquivos do sistema operacional -----
 .DS_Store
+Thumbs.db
+
+# ----- 🛠️ Editores e IDEs -----
+.vscode/
+.idea/
+*.swp
+*.swo
