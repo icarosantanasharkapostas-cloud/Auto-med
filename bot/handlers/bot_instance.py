@@ -7,6 +7,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 import discord
 import asyncio
 import logging
+
+# 🩹 Aplica a correção do bug do discord.py-self LOGO no início,
+# antes de qualquer bot ser criado. Isso resolve de forma definitiva o erro
+# "'NoneType' object is not iterable" que acontecia ao conectar no Discord.
+from bot.utils.discord_patch import aplicar_patch_discord
+aplicar_patch_discord()
+
 from bot.utils.anti_detection import AntiDetectionUtils, RateLimiter
 from bot.services.ocr_service import OCRService
 from bot.services.gmail_service import GmailService
