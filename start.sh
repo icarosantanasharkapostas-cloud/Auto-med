@@ -21,21 +21,44 @@ install_tesseract_if_needed() {
 
   echo "⚠️ Tesseract OCR não encontrado. Tentando instalar..."
 
-  if command_exists apt-get; then
-    apt-get update && apt-get install -y tesseract-ocr tesseract-ocr-por || true
-  elif command_exists apk; then
-    apk add --no-cache tesseract-ocr || true
-  elif command_exists yum; then
-    yum install -y tesseract tesseract-langpack-por || true
-  else
-    echo "⚠️ Não foi possível detectar um gerenciador de pacotes suportado (apt/apk/yum)."
+  # Tenta com 'sudo' caso esteja disponível (alguns ambientes exigem root).
+  local SUDO=""
+  if command_exists sudo; then
+    SUDO="sudo"
   fi
 
-  if command_exists tesseract; then
-    echo "✅ Tesseract OCR instalado com sucesso."
+  if command_exists apt-get; then
+    $SUDO apt-get update -y || true
+    $SUDO apt-get install -y tesseract-ocr tesseract-ocr-por || true
+  elif command_exists apk; then
+    $SUDO apk add --no-cache tesseract-ocr tesseract-ocr-data-por || true
+  elif command_exists yum; then
+    $SUDO yum install -y tesseract tesseract-langpack-por || true
+  elif command_exists dnf; then
+    $SUDO dnf install -y tesseract tesseract-langpack-por || true
   else
-    echo "⚠️ Tesseract OCR continua indisponível. O sistema ainda pode funcionar,"
-    echo "   mas recursos de OCR podem falhar dependendo da configuração."
+    echo "⚠️ Não foi possível detectar um gerenciador de pacotes suportado (apt/apk/yum/dnf)."
+  fi
+
+  # -------- Verificação do que foi instalado --------
+  echo "🔎 Verificando se o Tesseract ficou disponível..."
+  if command_exists tesseract; then
+    echo "✅ Tesseract OCR encontrado em: $(command -v tesseract)"
+    echo "ℹ️ Versão do Tesseract:"
+    tesseract --version 2>&1 | head -n 1 || true
+  else
+    echo "=============================================================="
+    echo "⚠️ ATENÇÃO: O Tesseract OCR NÃO pôde ser instalado neste ambiente."
+    echo "   (Em alguns servidores, como a Square Cloud, NÃO há permissão"
+    echo "    de root/apt para instalar programas do sistema.)"
+    echo ""
+    echo "👉 O bot continuará funcionando normalmente! Só a leitura de"
+    echo "   imagens (print de comprovante) ficará indisponível."
+    echo ""
+    echo "✅ SOLUÇÃO: para confirmar um pagamento, digite no canal:"
+    echo "      pg Nome do Jogador"
+    echo "   Assim o bot busca o Pix direto no Gmail, sem precisar do OCR. 🎉"
+    echo "=============================================================="
   fi
 }
 

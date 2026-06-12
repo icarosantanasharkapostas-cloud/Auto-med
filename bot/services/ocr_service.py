@@ -26,6 +26,25 @@ _OCR_LANG = "por"
 
 class OCRService:
     @staticmethod
+    def tesseract_disponivel() -> bool:
+        """Verifica se o Tesseract OCR está REALMENTE disponível para uso.
+
+        Não basta o pytesseract estar instalado (a biblioteca Python):
+        o PROGRAMA 'tesseract' do sistema também precisa estar instalado.
+        Em servidores como a Square Cloud, muitas vezes não há permissão
+        para instalar o programa, então checamos aqui antes de tentar usar.
+        Retorna True só se tudo estiver pronto. ✅"""
+        if not _OCR_DISPONIVEL:
+            return False
+        try:
+            versao = pytesseract.get_tesseract_version()
+            print(f"✅ [OCR] Tesseract disponível (versão {versao}).")
+            return True
+        except Exception as e:
+            print(f"⚠️ [OCR] Tesseract NÃO disponível no sistema: {e}")
+            return False
+
+    @staticmethod
     async def extract_text_from_image_url(url: str) -> str:
         """Faz o download da imagem e extrai o texto com OCR (Tesseract).
         🔍 Com logs detalhados em cada etapa para facilitar o debug."""

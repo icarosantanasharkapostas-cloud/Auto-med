@@ -195,6 +195,16 @@ class MediacaoBot(discord.Client):
 
             conteudo = (message.content or "").strip()
 
+            # 💸 PRIORIDADE MÁXIMA: comando manual "pg Nome" (sem precisar de OCR!)
+            # Se alguém escrever, por exemplo, "pg Juan" (com ou sem imagem anexada),
+            # o bot busca o pagamento DIRETO no Gmail pelo nome, ignorando a imagem.
+            # Isso é mais confiável do que ler o print, e funciona mesmo SEM o Tesseract. ✅
+            if conteudo.lower().startswith("pg "):
+                print(f"✅ [CMD] Comando 'pg' detectado de {message.author}: '{conteudo[:60]}'")
+                self._log_to_db("info", f"Comando 'pg' recebido de {message.author}")
+                await self.cmd_pg(message)
+                return  # Não processa OCR da imagem quando o comando 'pg' é usado.
+
             # 🔎 Detecção de comandos
             if conteudo.startswith(f"{self.prefix}criar_sala"):
                 print(f"✅ [CMD] Comando 'criar_sala' detectado de {message.author}")
@@ -332,6 +342,89 @@ class MediacaoBot(discord.Client):
                  f"❌ Não encontrei nenhum pix de '{nome}' com valor R${valor} nos emails recentes."
              )
 
+    async def cmd_pg(self, message):
+        """Comando manual: "pg Nome do Jogador" (valor é opcional).
+
+        👉 Exemplos de uso:
+           - "pg Juan"            -> busca no Gmail um Pix do "Juan" (qualquer valor)
+           - "pg Juan Silva"      -> busca por "Juan Silva"
+           - "pg Juan 10,00"      -> busca por "Juan" no valor de R$ 10,00
+
+        O bot procura o pagamento DIRETO no Gmail, sem precisar ler nenhuma
+        imagem (sem OCR/Tesseract). É a forma mais confiável de confirmar! ✅
+        """
+        print(f"🔍 [PG] Comando 'pg' recebido: '{message.content[:100]}'")
+
+        if not self.email or not self.email_senha:
+            print(f"⚠️ [PG] E-mail não configurado para este cliente. Abortando.")
+            await AntiDetectionUtils.natural_action(
+                message.reply,
+                "⚠️ E-mail não configurado. Avise o administrador para configurar o Gmail."
+            )
+            return
+
+        # Remove o prefixo "pg " (3 primeiros caracteres) e separa os termos.
+        resto = message.content.strip()[3:].strip()
+        argumentos = resto.split()
+
+        if not argumentos:
+            print(f"⚠️ [PG] Nenhum nome informado após 'pg'. Abortando.")
+            await AntiDetectionUtils.natural_action(
+                message.reply,
+                "📝 Use assim: `pg Nome do Jogador`\nExemplo: `pg Juan`"
+            )
+            return
+
+        # Tenta descobrir se o último termo é um VALOR (ex: 10, 10,00, 10.50).
+        # Se for, o nome é tudo menos o último termo. Senão, valor fica vazio.
+        valor = None
+        ultimo = argumentos[-1].replace("R$", "").replace("r$", "").replace(",", ".").strip()
+        if len(argumentos) >= 2:
+            try:
+                float(ultimo)
+                valor = argumentos[-1]  # mantém o formato original (ex: "10,00")
+                nome = " ".join(argumentos[:-1])
+            except ValueError:
+                nome = " ".join(argumentos)
+        else:
+            nome = " ".join(argumentos)
+
+        valor_txt = f" no valor de R${valor}" if valor else ""
+        print(f"✅ [PG] Nome extraído: '{nome}' | Valor: '{valor if valor else '(qualquer)'}'")
+
+        await AntiDetectionUtils.natural_action(
+            message.reply,
+            f"🔎 Procurando no Gmail um Pix de **{nome}**{valor_txt}... Um instante! ⏳"
+        )
+
+        def run_sync_gmail():
+            return GmailService.check_payment_email(self.email, self.email_senha, nome, valor)
+
+        print(f"🔍 [PG] Iniciando busca no Gmail (em segundo plano)...")
+        loop = asyncio.get_event_loop()
+        resultado = await loop.run_in_executor(None, run_sync_gmail)
+        print(f"✅ [PG] Busca no Gmail concluída. Encontrou pagamento? {'SIM' if resultado else 'NÃO'}")
+
+        if resultado:
+            await AntiDetectionUtils.natural_action(
+                message.channel.send,
+                f"✅ **Pagamento Confirmado via E-mail (Gmail)!**\n"
+                f"👤 Nome: {resultado['nome']}\n"
+                f"💰 Valor: R$ {resultado['valor']}\n"
+                f"🕒 Data: {resultado['data']}"
+            )
+            self._salvar_pagamento(
+                resultado['nome'],
+                resultado['valor'] if valor else "0",
+                str(message.channel.id)
+            )
+        else:
+            await AntiDetectionUtils.natural_action(
+                message.channel.send,
+                f"❌ Não encontrei nenhum Pix de **{nome}**{valor_txt} nos e-mails de hoje.\n"
+                f"Confira se o nome está correto e se o comprovante já chegou no Gmail."
+            )
+
     async def check_comprovante_print(self, message):
         """Verifica se a imagem é um comprovante usando OCR.
         🔍 ESTE MÉTODO TEM LOGS DETALHADOS EM CADA ETAPA para descobrir
@@ -354,6 +447,21 @@ class MediacaoBot(discord.Client):
                 print(f"⏭️ [COMPROVANTE] O anexo NÃO é uma imagem suportada (.png/.jpg/.jpeg/.webp). Ignorando.")
                 return
             print(f"✅ [COMPROVANTE] Anexo é uma imagem suportada.")
+
+            # Etapa 2.5: Verificar se o Tesseract (OCR) está disponível neste servidor.
+            # Em ambientes como a Square Cloud, muitas vezes NÃO dá para instalar o
+            # programa 'tesseract'. Nesse caso, avisamos o usuário para usar "pg Nome". ✅
+            if not OCRService.tesseract_disponivel():
+                print("⚠️ [COMPROVANTE] Tesseract não disponível, usando modo texto apenas.")
+                self.logger.warning("⚠️ Tesseract não disponível, usando modo texto apenas")
+                self._log_to_db("warning", "Tesseract (OCR) indisponível — leitura de imagem desativada.")
+                await AntiDetectionUtils.natural_action(
+                    message.reply,
+                    "⚠️ Não consigo ler imagens neste servidor (OCR indisponível).\n"
+                    "✅ Para confirmar o pagamento, digite: `pg Nome do Jogador`\n"
+                    "Exemplo: `pg Juan` — eu busco o Pix direto no Gmail! 🎉"
+                )
+                return
 
             # Etapa 3: Avisar que está analisando
             print(f"💬 [COMPROVANTE] Enviando mensagem 'Analisando comprovante...'")
