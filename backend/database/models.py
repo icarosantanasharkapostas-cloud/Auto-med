@@ -3,6 +3,22 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .config import Base
 
+
+class Admin(Base):
+    """Usuário administrador da dashboard (login do painel).
+
+    Serve como alternativa/segurança caso as variáveis de ambiente
+    ADMIN_USERNAME / ADMIN_PASSWORD não funcionem na hospedagem.
+    A senha é guardada com hash (passlib), nunca em texto puro.
+    """
+    __tablename__ = "admins"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class Client(Base):
     """Modelo para representar um cliente do bot (a conta de um mediador)"""
     __tablename__ = "clients"

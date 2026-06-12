@@ -24,6 +24,8 @@ psycopg2-binary==2.9.10
 # ----- Autenticacao (JWT) -----
 # O codigo usa "import jwt" (biblioteca PyJWT). NAO trocar por python-jose.
 PyJWT==2.9.0
+# Hash de senhas do admin (esquema pbkdf2_sha256, 100% Python, sem compilar).
+passlib==1.7.4
 
 # ----- Discord (self-bot) -----
 discord.py-self==2.0.0

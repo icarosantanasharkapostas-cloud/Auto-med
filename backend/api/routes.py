@@ -8,16 +8,24 @@ from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSoc
 from sqlalchemy.orm import Session
 from bot.client_manager import manager
 from .schemas import ClientCreate, ClientUpdate, ClientOut, LoginSchema, TokenSchema
-from backend.database.models import Client, Log, Pagamento, Fila
+from backend.database.models import Client, Log, Pagamento, Fila, Admin
 from backend.database.config import get_db
 import os
 import jwt
 from datetime import datetime, timedelta
+from passlib.context import CryptContext
 
 router = APIRouter()
 
 SECRET_KEY = os.getenv("SECRET_KEY", "minha_chave_secreta_padrao")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
+
+# Contexto para gerar/verificar hash de senha (pbkdf2_sha256 = puro Python).
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+
+# Credenciais padrão criadas pelo endpoint /setup-admin (troque depois!)
+DEFAULT_ADMIN_USERNAME = "admin"
+DEFAULT_ADMIN_PASSWORD = "admin123"
 
 def create_access_token(data: dict):
     to_encode = data.copy()
@@ -28,15 +36,68 @@ def create_access_token(data: dict):
 
 # --- AUTENTICAÇÃO ---
 @router.post("/auth/login", response_model=TokenSchema)
-def login(dados: LoginSchema):
+def login(dados: LoginSchema, db: Session = Depends(get_db)):
+    """Login do painel.
+
+    Aceita login de DUAS formas (qualquer uma que bater libera o acesso):
+      1) Pelas variáveis de ambiente ADMIN_USERNAME / ADMIN_PASSWORD.
+      2) Por um admin salvo no banco de dados (criado pelo /setup-admin
+         ou pelo script reset_admin.py). A senha do banco é verificada
+         com hash (passlib), nunca em texto puro.
+    """
     admin_user = os.getenv("ADMIN_USERNAME", "admin")
     admin_pass = os.getenv("ADMIN_PASSWORD", "admin")
-    
-    if dados.username != admin_user or dados.password != admin_pass:
-        raise HTTPException(status_code=401, detail="Credenciais inválidas")
-        
-    token = create_access_token({"sub": admin_user})
-    return {"access_token": token, "token_type": "bearer"}
+
+    # 1) Tenta pelas variáveis de ambiente
+    if dados.username == admin_user and dados.password == admin_pass:
+        token = create_access_token({"sub": dados.username})
+        return {"access_token": token, "token_type": "bearer"}
+
+    # 2) Tenta pelo admin salvo no banco de dados
+    db_admin = db.query(Admin).filter(Admin.username == dados.username).first()
+    if db_admin and pwd_context.verify(dados.password, db_admin.password_hash):
+        token = create_access_token({"sub": db_admin.username})
+        return {"access_token": token, "token_type": "bearer"}
+
+    raise HTTPException(status_code=401, detail="Credenciais inválidas")
+
+
+# ===================================================================
+# ⚠️ ENDPOINT TEMPORÁRIO - REMOVER APÓS O PRIMEIRO USO! ⚠️
+# ===================================================================
+# Este endpoint cria (ou redefine) um usuário admin no banco de dados
+# com credenciais padrão. Serve para destravar o login quando as
+# variáveis de ambiente ADMIN_USERNAME/ADMIN_PASSWORD não funcionam.
+#
+# 🔒 IMPORTANTE: por segurança, APAGUE este endpoint (toda esta função)
+# depois de usá-lo uma vez e troque a senha padrão!
+# ===================================================================
+@router.get("/setup-admin")
+def setup_admin(db: Session = Depends(get_db)):
+    """Cria/redefine o admin padrão no banco. SEM autenticação (temporário)."""
+    password_hash = pwd_context.hash(DEFAULT_ADMIN_PASSWORD)
+
+    db_admin = db.query(Admin).filter(Admin.username == DEFAULT_ADMIN_USERNAME).first()
+    if db_admin:
+        db_admin.password_hash = password_hash
+        acao = "atualizado"
+    else:
+        db_admin = Admin(username=DEFAULT_ADMIN_USERNAME, password_hash=password_hash)
+        db.add(db_admin)
+        acao = "criado"
+
+    db.commit()
+
+    return {
+        "success": True,
+        "message": f"Admin '{DEFAULT_ADMIN_USERNAME}' {acao} com sucesso!",
+        "username": DEFAULT_ADMIN_USERNAME,
+        "password": DEFAULT_ADMIN_PASSWORD,
+        "aviso": (
+            "Faça login com essas credenciais e TROQUE a senha depois. "
+            "Por seguranca, REMOVA este endpoint (/setup-admin) do codigo!"
+        ),
+    }
 
 from fastapi.security import OAuth2PasswordBearer
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
