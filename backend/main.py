@@ -1,12 +1,22 @@
-# --- INÍCIO DO BLOCO: atualização única de schema (cole tudo junto) ---
-from sqlalchemy import text
-from backend.database.config import SessionLocal
+import sys
+import os
 
+# Adiciona o diretório raiz ao sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import asyncio
+from fastapi import FastAPI, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from sqlalchemy import text # Import necessário para o SQL
+from backend.database.config import engine, Base, SessionLocal
+from backend.api.routes import router
+from bot.client_manager import manager
+from backend.database.models import Client, Log, Pagamento, Fila
+
+# --- FUNÇÃO DE ATUALIZAÇÃO SQUAD CLOUD ---
 def atualizar_banco_automatico():
-    """
-    Executa ALTER TABLE IF NOT EXISTS para garantir que as colunas novas existam.
-    Funciona como operação one-shot ao iniciar a aplicação.
-    """
     db = SessionLocal()
     try:
         colunas = [
@@ -21,11 +31,63 @@ def atualizar_banco_automatico():
             try:
                 db.execute(text(sql))
                 db.commit()
-                print("[update-db] OK:", sql)
+                print(f"[DB-UPDATE] Sucesso: {sql}")
             except Exception as e:
                 db.rollback()
-                print("[update-db] erro (ignorado):", sql, "->", str(e))
-        print("[update-db] verificação concluída.")
+                print(f"[DB-UPDATE] Ignorado (já deve existir): {e}")
     finally:
         db.close()
-# --- FIM DO BLOCO ---
+# -----------------------------------------
+
+# Inicializa banco de dados (Cria tabelas novas se não existirem)
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title="Mediação Bot API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(router, prefix="/api")
+
+# Montar frontend
+app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
+templates = Jinja2Templates(directory="frontend/templates")
+
+@app.on_event("startup")
+async def startup_event():
+    # Roda a atualização de colunas na Squad Cloud assim que o bot liga
+    atualizar_banco_automatico()
+    
+    # Inicializar bots marcados como "ativos" no banco
+    db = SessionLocal()
+    try:
+        active_clients = db.query(Client).filter(Client.ativo == True).all()
+        for c in active_clients:
+            success = await manager.start_client({
+                "id": c.id,
+                "nome": c.nome,
+                "token": c.token,
+                "email": c.email,
+                "senha_email": c.senha_email,
+                "config_json": c.config_json
+            })
+            print(f"Startup client {c.id} start status: {success}")
+    finally:
+        db.close()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await manager.shutdown_all()
+
+@app.get("/")
+async def dashboard(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/login")
+async def login_page(request: Request):
+    return templates.TemplateResponse("login.html", {"request": request})
