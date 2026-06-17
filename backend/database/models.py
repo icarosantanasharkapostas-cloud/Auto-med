@@ -15,11 +15,22 @@ class Client(Base):
     config_json = Column(Text)
     ativo = Column(Boolean, default=True)
 
+# Tabela de Admins (usuários/admins vinculados ao client)
+class Admin(Base):
+    __tablename__ = "admins"
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, nullable=True)   # opcional: vincular a um client
+    discord_id = Column(String, nullable=True)   # id do usuário no Discord (se aplicável)
+    nome = Column(String, nullable=True)
+    nivel = Column(String, default="moderador")  # exemplo: moderador, admin
+    ativo = Column(Boolean, default=True)
+    criado_em = Column(DateTime, default=datetime.utcnow)
+
 # Tabela de Logs
 class Log(Base):
     __tablename__ = "logs"
     id = Column(Integer, primary_key=True)
-    client_id = Column(Integer)
+    client_id = Column(Integer, nullable=True)
     mensagem = Column(Text)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
@@ -27,11 +38,12 @@ class Log(Base):
 class Pagamento(Base):
     __tablename__ = "pagamentos"
     id = Column(Integer, primary_key=True)
-    client_id = Column(Integer)
-    valor = Column(Float)
-    pagador = Column(String)
-    status = Column(String) # PENDENTE, CONFIRMADO
+    client_id = Column(Integer, nullable=True)
+    valor = Column(Float, nullable=True)
+    pagador = Column(String, nullable=True)
+    status = Column(String, default="PENDENTE") # PENDENTE, CONFIRMADO
     timestamp = Column(DateTime, default=datetime.utcnow)
+    meta = Column(Text, nullable=True)
 
 # Tabela de Filas (A que atualizamos antes)
 class Fila(Base):
