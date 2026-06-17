@@ -1,10 +1,14 @@
+# --- INÍCIO DO BLOCO: atualização única de schema (cole tudo junto) ---
 from sqlalchemy import text
+from backend.database.config import SessionLocal
 
-# Script temporário para atualizar o banco na Squad Cloud
-def atualizar_banco_squad():
+def atualizar_banco_automatico():
+    """
+    Executa ALTER TABLE IF NOT EXISTS para garantir que as colunas novas existam.
+    Funciona como operação one-shot ao iniciar a aplicação.
+    """
     db = SessionLocal()
     try:
-        # Tenta adicionar as colunas uma por uma
         colunas = [
             "ALTER TABLE filas ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'AGUARDANDO_PAGAMENTO'",
             "ALTER TABLE filas ADD COLUMN IF NOT EXISTS tipo_partida VARCHAR DEFAULT 'NORMAL'",
@@ -17,8 +21,11 @@ def atualizar_banco_squad():
             try:
                 db.execute(text(sql))
                 db.commit()
-            except Exception:
-                db.rollback() 
-        print("Banco de dados verificado e atualizado!")
+                print("[update-db] OK:", sql)
+            except Exception as e:
+                db.rollback()
+                print("[update-db] erro (ignorado):", sql, "->", str(e))
+        print("[update-db] verificação concluída.")
     finally:
         db.close()
+# --- FIM DO BLOCO ---
