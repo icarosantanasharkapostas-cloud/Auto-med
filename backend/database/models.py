@@ -1,23 +1,51 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, Boolean, ForeignKey
 from sqlalchemy.dialects.postgresql import ARRAY
-from backend.database.config import Base   # IMPORTAR o Base do projeto (config.py)
+from sqlalchemy.orm import relationship
+from backend.database.config import Base
 from datetime import datetime
 
+# Tabela de Clientes (Bots)
+class Client(Base):
+    __tablename__ = "clients"
+    id = Column(Integer, primary_key=True)
+    nome = Column(String, nullable=False)
+    token = Column(String, nullable=False)
+    email = Column(String)
+    senha_email = Column(String)
+    config_json = Column(Text)
+    ativo = Column(Boolean, default=True)
+
+# Tabela de Logs
+class Log(Base):
+    __tablename__ = "logs"
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer)
+    mensagem = Column(Text)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+# Tabela de Pagamentos
+class Pagamento(Base):
+    __tablename__ = "pagamentos"
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer)
+    valor = Column(Float)
+    pagador = Column(String)
+    status = Column(String) # PENDENTE, CONFIRMADO
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+# Tabela de Filas (A que atualizamos antes)
 class Fila(Base):
     __tablename__ = "filas"
-
     id = Column(Integer, primary_key=True)
     client_id = Column(Integer, nullable=False)
-    canal_id = Column(String, nullable=False)                # ID do canal/text channel
-    jogadores = Column(ARRAY(String))                         # lista dos nomes dos jogadores
-    status = Column(String, default="AGUARDANDO_PAGAMENTO")   # AGUARDANDO_PAGAMENTO | EM_ANDAMENTO | FINALIZADA | PAGA
-    tipo_partida = Column(String, default="NORMAL")           # NORMAL | GELO_INFINITO
-    valor_esperado = Column(Float, nullable=True)             # valor esperado da partida (pode ser NULL)
-    placar_final = Column(String, nullable=True)              # "9 x 7", por exemplo
-    timestamp_finalizacao = Column(DateTime, nullable=True)   # data/hora em que a partida foi finalizada
-    meta = Column(Text, nullable=True)                        # campo livre para armazenar JSON/texto auxiliar
+    canal_id = Column(String, nullable=False)
+    jogadores = Column(ARRAY(String))
+    status = Column(String, default="AGUARDANDO_PAGAMENTO")
+    tipo_partida = Column(String, default="NORMAL")
+    valor_esperado = Column(Float, nullable=True)
+    placar_final = Column(String, nullable=True)
+    timestamp_finalizacao = Column(DateTime, nullable=True)
+    meta = Column(Text, nullable=True)
 
     def __repr__(self):
-        return (f"<​Fila id={self.id} canal_id={self.canal_id} "
-                f"status={self.status} tipo={self.tipo_partida} valor_esperado={self.valor_esperado}>")
-
+        return f"<​Fila id={self.id} status={self.status}>"
