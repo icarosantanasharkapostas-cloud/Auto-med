@@ -1,3 +1,4 @@
+# backend/main.py
 import sys
 import os
 
@@ -9,35 +10,46 @@ from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import text # Import necessário para o SQL
+from sqlalchemy import text
 from backend.database.config import engine, Base, SessionLocal
 from backend.api.routes import router
 from bot.client_manager import manager
-from backend.database.models import Client, Log, Pagamento, Fila
+from backend.database.models import Client, Log, Pagamento, Fila, Admin
 
-# --- FUNÇÃO DE ATUALIZAÇÃO SQUAD CLOUD ---
+# --- FUNÇÃO DE ATUALIZAÇÃO ONE-SHOT (Squad Cloud / ambientes sem acesso a psql) ---
 def atualizar_banco_automatico():
+    """
+    Executa ALTER TABLE IF NOT EXISTS para garantir colunas que o frontend pode enviar.
+    One-shot: é seguro executá-lo no startup (usa IF NOT EXISTS) — depois remova o bloco.
+    """
     db = SessionLocal()
     try:
         colunas = [
+            # Colunas para a tabela filas
             "ALTER TABLE filas ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'AGUARDANDO_PAGAMENTO'",
             "ALTER TABLE filas ADD COLUMN IF NOT EXISTS tipo_partida VARCHAR DEFAULT 'NORMAL'",
             "ALTER TABLE filas ADD COLUMN IF NOT EXISTS valor_esperado NUMERIC",
             "ALTER TABLE filas ADD COLUMN IF NOT EXISTS placar_final VARCHAR",
             "ALTER TABLE filas ADD COLUMN IF NOT EXISTS timestamp_finalizacao TIMESTAMP",
-            "ALTER TABLE filas ADD COLUMN IF NOT EXISTS meta TEXT"
+            "ALTER TABLE filas ADD COLUMN IF NOT EXISTS meta TEXT",
+            # Colunas adicionais para clients (fields do painel)
+            "ALTER TABLE clients ADD COLUMN IF NOT EXISTS categoria_salas_id VARCHAR",
+            "ALTER TABLE clients ADD COLUMN IF NOT EXISTS cargo_mediador_id VARCHAR",
+            # Caso precise adicionar outras colunas no futuro, inclua aqui
         ]
         for sql in colunas:
             try:
                 db.execute(text(sql))
                 db.commit()
-                print(f"[DB-UPDATE] Sucesso: {sql}")
+                print(f"[DB-UPDATE] OK: {sql}")
             except Exception as e:
                 db.rollback()
-                print(f"[DB-UPDATE] Ignorado (já deve existir): {e}")
+                # Ignora erros esperados (ex.: permissão) mas loga para depuração
+                print(f"[DB-UPDATE] Ignorado/Erro: {sql} -> {e}")
+        print("[DB-UPDATE] verificação concluída.")
     finally:
         db.close()
-# -----------------------------------------
+# -----------------------------------------------------------------------------
 
 # Inicializa banco de dados (Cria tabelas novas se não existirem)
 Base.metadata.create_all(bind=engine)
@@ -60,9 +72,9 @@ templates = Jinja2Templates(directory="frontend/templates")
 
 @app.on_event("startup")
 async def startup_event():
-    # Roda a atualização de colunas na Squad Cloud assim que o bot liga
+    # Roda a atualização de colunas (one-shot) no início
     atualizar_banco_automatico()
-    
+
     # Inicializar bots marcados como "ativos" no banco
     db = SessionLocal()
     try:
