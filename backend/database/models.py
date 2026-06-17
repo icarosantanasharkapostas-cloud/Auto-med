@@ -1,82 +1,26 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, ForeignKey, Float
-from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
-from .config import Base
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.ext.declarative import declarative_base
+from datetime import datetime
 
-
-class Admin(Base):
-    """Usuário administrador da dashboard (login do painel).
-
-    Serve como alternativa/segurança caso as variáveis de ambiente
-    ADMIN_USERNAME / ADMIN_PASSWORD não funcionem na hospedagem.
-    A senha é guardada com hash (passlib), nunca em texto puro.
-    """
-    __tablename__ = "admins"
-
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True, nullable=False)
-    password_hash = Column(String, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-
-class Client(Base):
-    """Modelo para representar um cliente do bot (a conta de um mediador)"""
-    __tablename__ = "clients"
-
-    id = Column(Integer, primary_key=True, index=True)
-    nome = Column(String, index=True)
-    token = Column(String)
-    email = Column(String, nullable=True)
-    senha_email = Column(String, nullable=True) # Idealmente criptografada em um sistema real
-    ativo = Column(Boolean, default=False)
-    config_json = Column(JSON, default={})
-    discord_id = Column(String, nullable=True) # Pra salvar o ID da conta do cliente
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-
-    logs = relationship("Log", back_populates="client", cascade="all, delete-orphan")
-    pagamentos = relationship("Pagamento", back_populates="client", cascade="all, delete-orphan")
-    filas = relationship("Fila", back_populates="client", cascade="all, delete-orphan")
-
-
-class Log(Base):
-    """Modelo para logs do sistema por cliente"""
-    __tablename__ = "logs"
-
-    id = Column(Integer, primary_key=True, index=True)
-    client_id = Column(Integer, ForeignKey("clients.id"))
-    tipo = Column(String) # info, warning, error, success
-    mensagem = Column(String)
-    timestamp = Column(DateTime(timezone=True), server_default=func.now())
-
-    client = relationship("Client", back_populates="logs")
-
-
-class Pagamento(Base):
-    """Modelo para pagamentos verificados"""
-    __tablename__ = "pagamentos"
-
-    id = Column(Integer, primary_key=True, index=True)
-    client_id = Column(Integer, ForeignKey("clients.id"))
-    nome_pagador = Column(String)
-    valor = Column(Float)
-    horario = Column(String) # Horário que consta no recibo
-    canal_id = Column(String) # Canal do discord onde foi enviado o comprovante
-    processado_em = Column(DateTime(timezone=True), server_default=func.now())
-
-    client = relationship("Client", back_populates="pagamentos")
-
+Base = declarative_base()
 
 class Fila(Base):
-    """Modelo de fila/sala de jogo criada"""
     __tablename__ = "filas"
 
-    id = Column(Integer, primary_key=True, index=True)
-    client_id = Column(Integer, ForeignKey("clients.id"))
-    canal_id = Column(String)
-    jogadores = Column(JSON, default=[]) # Lista de menções ou nomes
-    status = Column(String) # aberta, fechada, em_andamento
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    id = Column(Integer, primary_key=True)
+    client_id = Column(Integer, nullable=False)
+    canal_id = Column(String, nullable=False)                # ID do canal/text channel
+    jogadores = Column(ARRAY(String))                         # lista dos nomes dos jogadores
+    status = Column(String, default="AGUARDANDO_PAGAMENTO")   # AGUARDANDO_PAGAMENTO | EM_ANDAMENTO | FINALIZADA | PAGA
+    tipo_partida = Column(String, default="NORMAL")           # NORMAL | GELO_INFINITO
+    valor_esperado = Column(Float, nullable=True)             # valor esperado da partida (pode ser NULL)
+    placar_final = Column(String, nullable=True)              # "9 x 7", por exemplo
+    timestamp_finalizacao = Column(DateTime, nullable=True)   # data/hora em que a partida foi finalizada
+    meta = Column(Text, nullable=True)                        # campo livre para armazenar JSON/texto auxiliar
 
-    client = relationship("Client", back_populates="filas")
+    def __repr__(self):
+        return (f"<​Fila id={self.id} canal_id={self.canal_id} "
+                f"status={self.status} tipo={self.tipo_partida} valor_esperado={self.valor_esperado}>")
+
 
