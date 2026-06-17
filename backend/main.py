@@ -5,54 +5,66 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import asyncio
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import text, create_engine
-from backend.database.config import DATABASE_URL, engine, Base, SessionLocal
+from sqlalchemy import text
+from backend.database.config import engine, Base, SessionLocal
+
+# --- CORREÇÃO PREVENTIVA (executa ANTES de importar models/router/manager) ---
+def correcao_preventiva_sqlite():
+    """
+    Tenta adicionar colunas faltantes diretamente no banco (compatível com SQLite/Postgres).
+    Executa antes de importar models/rotas para evitar erro de "no such column" durante startup.
+    """
+    # Usamos engine.begin() para garantir transação/commit automático
+    try:
+        with engine.begin() as conn:
+            # Colunas que podem ser enviadas pelo painel para clients
+            colunas_clients = [
+                ("categoria_salas_id", "VARCHAR"),
+                ("cargo_mediador_id", "VARCHAR"),
+                ("criado_em", "TIMESTAMP")
+            ]
+            for col, tipo in colunas_clients:
+                try:
+                    conn.execute(text(f"ALTER TABLE clients ADD COLUMN {col} {tipo}"))
+                    print(f"[DB-FIX] Tentativa: adicionar coluna clients.{col}")
+                except Exception:
+                    # ignora se já existir ou se não for suportado
+                    pass
+
+            # Colunas para a tabela filas
+            colunas_filas = {
+                "status": "VARCHAR DEFAULT 'AGUARDANDO_PAGAMENTO'",
+                "tipo_partida": "VARCHAR DEFAULT 'NORMAL'",
+                "valor_esperado": "NUMERIC",
+                "placar_final": "VARCHAR",
+                "timestamp_finalizacao": "TIMESTAMP",
+                "meta": "TEXT"
+            }
+            for col, tipo in colunas_filas.items():
+                try:
+                    conn.execute(text(f"ALTER TABLE filas ADD COLUMN {col} {tipo}"))
+                    print(f"[DB-FIX] Tentativa: adicionar coluna filas.{col}")
+                except Exception:
+                    pass
+        print("[DB-FIX] verificação concluída.")
+    except Exception as e:
+        # Log para debug; não impede a continuação
+        print(f"[DB-FIX] Erro ao tentar correção preventiva: {e}")
+
+# Executa a correção antes de importar models/routers que possam ler as tabelas
+correcao_preventiva_sqlite()
+# ---------------------------------------------------------------------------
+
+# Agora importamos os models e as rotas/manager com segurança
+from backend.database.models import Client, Log, Pagamento, Fila, Admin
 from backend.api.routes import router
 from bot.client_manager import manager
 
-# --- CORREÇÃO DE EMERGÊNCIA (RODA ANTES DE TUDO) ---
-def correcao_preventiva_sqlite():
-    # Conecta diretamente via engine para garantir que as colunas existam ANTES do app carregar os models
-    with engine.connect() as conn:
-        # 1. Colunas para a tabela clients
-        colunas_clients = ["categoria_salas_id", "cargo_mediador_id"]
-        for col in colunas_clients:
-            try:
-                conn.execute(text(f"ALTER TABLE clients ADD COLUMN {col} VARCHAR"))
-                conn.commit()
-                print(f"[DB-FIX] Coluna {col} adicionada em clients.")
-            except Exception:
-                # Se der erro é porque a coluna provavelmente já existe
-                pass
-
-        # 2. Colunas para a tabela filas
-        colunas_filas = {
-            "status": "VARCHAR DEFAULT 'AGUARDANDO_PAGAMENTO'",
-            "tipo_partida": "VARCHAR DEFAULT 'NORMAL'",
-            "valor_esperado": "NUMERIC",
-            "placar_final": "VARCHAR",
-            "timestamp_finalizacao": "TIMESTAMP",
-            "meta": "TEXT"
-        }
-        for col, tipo in colunas_filas.items():
-            try:
-                conn.execute(text(f"ALTER TABLE filas ADD COLUMN {col} {tipo}"))
-                conn.commit()
-                print(f"[DB-FIX] Coluna {col} adicionada em filas.")
-            except Exception:
-                pass
-
-# Executa a correção ANTES de importar os models que causam o erro
-correcao_preventiva_sqlite()
-
-# Agora importamos os models com segurança
-from backend.database.models import Client, Log, Pagamento, Fila, Admin
-
-# Inicializa banco de dados padrão
+# Inicializa banco de dados (cria tabelas novas se não existirem)
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Mediação Bot API")
@@ -67,11 +79,13 @@ app.add_middleware(
 
 app.include_router(router, prefix="/api")
 
+# Montar frontend
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 templates = Jinja2Templates(directory="frontend/templates")
 
 @app.on_event("startup")
 async def startup_event():
+    # Inicializar bots marcados como "ativos" no banco
     db = SessionLocal()
     try:
         active_clients = db.query(Client).filter(Client.ativo == True).all()
