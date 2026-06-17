@@ -6,48 +6,37 @@ import discord
 import asyncio
 import logging
 import re
-# 🩹 Aplica a correção do bug do discord.py-self LOGO no início,
-# antes de qualquer bot ser criado. Isso resolve de forma definitiva o erro
-# "'NoneType' object is not iterable" que acontecia ao conectar no Discord.
+from datetime import datetime, timedelta
+
+# 🩹 Aplica a correção do bug do discord.py-self LOGO no início
 from bot.utils.discord_patch import aplicar_patch_discord
 aplicar_patch_discord()
 from bot.utils.anti_detection import AntiDetectionUtils, RateLimiter
 from bot.services.ocr_service import OCRService
 from bot.services.gmail_service import GmailService
-from backend.database.models import Log, Fila, Pagamento # Adicionando imports
+from backend.database.models import Log, Fila, Pagamento
 import traceback
 
 class MediacaoBot(discord.Client):
     def __init__(self, client_data: dict, db_session_factory):
-        # Utilizar args do discord-py-self
         super().__init__()
         self.db_client_id = client_data.get("id")
         self.client_name = client_data.get("nome") or "SemNome"
-        # Configurações do cliente
-        # IMPORTANTE: se "config_json" vier None do banco de dados,
-        # o .get("config_json", {}) ainda retorna None (pois a chave existe).
-        # Por isso usamos "or {}" para garantir que SEMPRE seja um dicionário. 🛡️
         self.config = client_data.get("config_json") or {}
         if not isinstance(self.config, dict):
-            # Se por algum motivo não for um dicionário, forçamos um dicionário vazio
             self.config = {}
         self.email = client_data.get("email")
         self.email_senha = client_data.get("senha_email")
         self.logger = logging.getLogger(f"Bot-{self.client_name}")
         self.db_session_factory = db_session_factory
-        # Limite de taxa REDUZIDO para no máximo 5 ações de ENVIO por minuto.
-        # Isso deixa o bot mais "humano" e evita ser detectado pelo Discord. 🐢
         self.rate_limiter = RateLimiter(actions_per_minute=5)
-        # Configurações com valores padrão (nunca ficam None) ✅
         self.prefix = self.config.get("prefix") or "!"
-        self.categoria_id = self.config.get("categoria_id") # Categoria onde as salas são criadas
+        self.categoria_id = self.config.get("categoria_id")
         self.cargo_mediador_id = self.config.get("cargo_mediador_id")
-        # Valores padrão extras para evitar erros de "NoneType" 🛡️
         self.palavras_chave_canal = self.config.get("palavras_chave_canal") or ["fila", "filas", "partidas", "pagar"]
         self.valor_fila_padrao = self.config.get("valor_fila_padrao") or 5.50
         self.nome_recebedor_pix = self.config.get("nome_recebedor_pix") or ""
-        # 🐞 LOGS DE DEPURAÇÃO: mostram o valor de cada configuração ao iniciar
-        # Isso ajuda a descobrir QUAL variável está vindo vazia (None)
+
         print("=" * 50)
         print(f"🤖 Inicializando bot do cliente: {self.client_name}")
         print(f"🔎 [DEBUG] config: {self.config}")
@@ -59,11 +48,10 @@ class MediacaoBot(discord.Client):
         print(f"🔎 [DEBUG] nome_recebedor_pix: '{self.nome_recebedor_pix}'")
         print("=" * 50)
 
+    # ------------------------
+    # Início: Conexão e logs
+    # ------------------------
     async def start(self, token: str):
-        # Função responsável por LIGAR o bot e conectar ao Discord 🔌
-        # Aqui validamos tudo ANTES de chamar o Discord, para evitar o erro
-        # "'NoneType' object is not iterable".
-        # 1️⃣ Validação do TOKEN (a causa mais comum de erros ao iniciar) 🔑
         print(f"🚀 [DEBUG] Tentando iniciar o bot '{self.client_name}'...")
         if token is None:
             msg = "❌ ERRO: O token do bot está VAZIO (None). Verifique o cadastro do cliente no banco de dados!"
@@ -85,20 +73,13 @@ class MediacaoBot(discord.Client):
             print(msg)
             return
         print(f"🔑 [DEBUG] Token recebido (tamanho: {len(token)} caracteres). Conectando...")
-        # 2️⃣ Tentativa de conexão com RETENTATIVAS (retry) 🔁
-        # O erro "'NoneType' object is not iterable" muitas vezes acontece porque
-        # a biblioteca discord.py-self busca informações em sites externos
-        # (build number / propriedades do navegador) e essa busca pode FALHAR
-        # de forma temporária por causa da internet. Por isso tentamos algumas vezes.
         max_tentativas = 3
         for tentativa in range(1, max_tentativas + 1):
             try:
                 print(f"🔄 [DEBUG] Tentativa {tentativa} de {max_tentativas} de conexão...")
                 await super().start(token)
-                # Se chegou aqui sem erro, deu tudo certo ✅
                 return
             except TypeError as e:
-                # Erro típico de "NoneType is not iterable" (dado None vindo de site externo)
                 msg = (f"⚠️ Tentativa {tentativa} falhou (erro de dados nulos): {e}. "
                        f"Isso geralmente é instabilidade temporária do Discord/internet.")
                 self.logger.error(msg)
@@ -114,19 +95,16 @@ class MediacaoBot(discord.Client):
                     self._log_to_db("error", erro_final)
                     print(erro_final)
             except Exception as e:
-                # Qualquer outro erro (token inválido, sem internet, etc.)
                 erro_final = f"❌ Erro ao iniciar o bot '{self.client_name}': {type(e).__name__}: {e}"
                 self.logger.error(erro_final)
                 self._log_to_db("error", erro_final)
                 print(erro_final)
                 traceback.print_exc()
-                # Esses erros normalmente não se resolvem tentando de novo, então paramos
                 return
 
     async def on_ready(self):
         self.logger.info(f"Bot {self.client_name} logado como {self.user}!")
         self._log_to_db("info", f"Bot {self.client_name} online como {self.user}")
-        # 🟢 Log bem visível confirmando que o bot está pronto para receber mensagens
         print("=" * 50)
         print(f"🟢 BOT ONLINE: {self.user} (cliente: {self.client_name})")
         print(f"👀 Prefixo dos comandos: '{self.prefix}'")
@@ -135,7 +113,6 @@ class MediacaoBot(discord.Client):
         print("=" * 50)
 
     def _log_to_db(self, log_type: str, message: str):
-        """Salva logs no banco de dados para a dashboard."""
         try:
             db = self.db_session_factory()
             new_log = Log(client_id=self.db_client_id, tipo=log_type, mensagem=message)
@@ -147,61 +124,34 @@ class MediacaoBot(discord.Client):
             import traceback
             traceback.print_exc()
 
-    async def on_message(self, message):
-        # 📨 ESTE EVENTO É CHAMADO PARA CADA MENSAGEM QUE O BOT VÊ.
-        # OBS IMPORTANTE: como este é um "self-bot" (conta de usuário), ele recebe
-        # TODAS as mensagens automaticamente. A biblioteca discord.py-self NÃO usa
-        # "intents" (diferente de bots normais). Por isso o conteúdo das mensagens
-        # (message.content) sempre vem preenchido, sem precisar configurar nada. ✅
-        # Ignorar mensagens do próprio bot (senão ele responde a si mesmo) 🔁
-        if message.author == self.user:
-            return
-        # 🐞 LOG DETALHADO: mostra cada mensagem recebida (ajuda muito a debugar!)
-        try:
-            canal_nome = getattr(message.channel, "name", "DM/privado")
-            conteudo = (message.content or "")[:100] # mostra só os 100 primeiros caracteres
-            print(f"📨 [MSG] Canal: #{canal_nome} | Autor: {message.author} | Texto: '{conteudo}' | Anexos: {len(message.attachments)}")
-        except Exception as e:
-            print(f"⚠️ [MSG] Erro ao logar mensagem recebida: {e}")
-        # Processa a mensagem em segundo plano (não trava o bot) ⚙️
-        asyncio.create_task(self.process_message(message))
-
+    # ------------------------
+    # Helpers: regex / normalização
+    # ------------------------
     def _normalize_spaces(self, s: str) -> str:
         return re.sub(r'\s+', ' ', s).strip()
 
     def _detect_payment_mention(self, text: str):
         """
-        Detecta se o texto contém alguma menção de pagamento em vários formatos.
-        Retorna None se não detectar nada ou um dict com {'name': str, 'indicator': str}
-        Exemplo de detecções:
-          - "Joao PG"
-          - "joão pago"
-          - "[Maria] pg"
-          - "Nome pgo" (typo comum)
+        Detecta variações de 'pagar' e tenta extrair um nome.
+        Retorna None ou dict {'name': str|None, 'indicator': str}
         """
         if not text:
             return None
         t = text.strip()
-
-        # Variantes aceitáveis para indicar pagamento (inclui typos comuns)
         indicators = [
             r'\bpg\b', r'\bp\.g\b', r'\bp g\b', r'\bpgo\b', r'\bpago\b',
             r'\bpagou\b', r'\bpaguei\b', r'\bpag\b', r'\bpg\.\b'
         ]
         indicator_pat = re.compile('|'.join(indicators), re.IGNORECASE)
 
-        # Padrões que tentam capturar "NOME <INDICADOR>" ou "<INDICADOR> NOME"
-        # 1) Nome seguido de indicador: "Joao PG", "João pago", "[Maria] pg"
         pat1 = re.compile(
             r'^(?P<name>[A-Za-zÀ-ÿ0-9 .,_\-\[\]\(\)]{2,60})\s*(?P<ind>' + '|'.join([p.strip(r'\b') for p in indicators]) + r')\b',
             re.IGNORECASE
         )
-        # 2) Indicador seguido de nome: "pg João", "pago: Maria"
         pat2 = re.compile(
             r'^(?P<ind>' + '|'.join([p.strip(r'\b') for p in indicators]) + r')[:\s\-]*\s*(?P<name>[A-Za-zÀ-ÿ0-9 .,_\-\[\]\(\)]{2,60})',
             re.IGNORECASE
         )
-        # 3) Nome entre colchetes seguido de indicador: "[Maria] pg"
         pat3 = re.compile(r'[\[\(]?\s*(?P<name>[A-Za-zÀ-ÿ0-9 .,_\-\']{2,60})\s*[\]\)]?.{0,3}(?P<ind>' + '|'.join([p.strip(r'\b') for p in indicators]) + r')\b', re.IGNORECASE)
 
         for pat in (pat1, pat2, pat3):
@@ -211,21 +161,14 @@ class MediacaoBot(discord.Client):
                 ind = m.groupdict().get('ind') or ""
                 name = name.strip(" []()")
                 name = self._normalize_spaces(name)
-                # descartamos matches que são muito curtos ou números isolados
                 if len(name) < 2:
                     return None
                 return {'name': name, 'indicator': ind.lower()}
-        # 4) Se só existe um indicador isolado (ex: "pago") sem nome, não sugerimos comando automático
         if indicator_pat.search(t):
             return {'name': None, 'indicator': indicator_pat.search(t).group(0).lower()}
         return None
 
     async def _suggest_payment_format(self, message, detected):
-        """
-        Envia uma sugestão discreta e amigável para o usuário sobre o formato correto.
-        A mensagem é apagada automaticamente após 'delay_seconds'.
-        """
-        # Construir sugestão
         if detected.get('name'):
             suggested_cmd = f"pg {detected['name']}"
             example = f"Ex.: `pg {detected['name']}`"
@@ -236,61 +179,166 @@ class MediacaoBot(discord.Client):
             text = ("⚠️ Detectei uma menção a pagamento, mas não encontrei um nome claro.\n"
                     "Para eu confirmar automaticamente, envie: `pg Nome` (ex.: `pg João Silva`).")
 
-        # Envia mensagem de forma discreta com natural_action (anti-detecção)
+        sent = None
         try:
             sent = await AntiDetectionUtils.natural_action(message.reply, text)
         except Exception:
-            # fallback direto caso natural_action falhe
-            sent = await message.reply(text)
+            pass
 
-        # Apagar a sugestão após alguns segundos (deixar discreta). Ajuste se necessário.
-        async def _del_then_delete(msg, delay_seconds=10):
+        if not sent:
+            try:
+                sent = await message.reply(text)
+            except Exception:
+                return
+
+        async def _del_then_delete(msg, delay_seconds=12):
             try:
                 await asyncio.sleep(delay_seconds)
                 await msg.delete()
             except Exception:
                 pass
 
-        # Criar task para apagar a mensagem
         try:
             asyncio.create_task(_del_then_delete(sent, delay_seconds=12))
         except Exception:
             pass
 
+    # ------------------------
+    # Find player helper for ambiguity resolution
+    # ------------------------
+    def _find_player_in_fila(self, fila, nome_recebido: str):
+        """
+        Tenta encontrar qual jogador da fila corresponde ao nome recebido.
+        Retorna:
+          - nome_exato (string) se encontrou 1 correspondência clara
+          - "AMBIGUO" se encontrou mais de 1 correspondência parcial
+          - None se não encontrou
+        """
+        if not fila or not getattr(fila, "jogadores", None):
+            return None
+        nome_lower = (nome_recebido or "").lower().strip()
+        matches = []
+        for j in fila.jogadores:
+            if not j:
+                continue
+            jclean = j.lower().strip()
+            # correspondência exata
+            if jclean == nome_lower:
+                return j
+            # correspondência parcial (sobrenome, parte do nome)
+            if nome_lower in jclean or jclean in nome_lower:
+                matches.append(j)
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            return "AMBIGUO"
+        return None
+
+    # ------------------------
+    # Detect partner result messages (bot parceiro)
+    # ------------------------
+    def _is_partner_result_msg(self, message):
+        parceiro_id = self.config.get("bote_parceiro_id")
+        text = (message.content or "").lower()
+        if parceiro_id and str(getattr(message.author, "id", "")) == str(parceiro_id):
+            return True
+        patterns = [r'partida.*encerrada', r'\d+\s*[x\-]\s*\d+', r'partida.*finalizada', r'resultado.*\d+']
+        for p in patterns:
+            if re.search(p, text):
+                return True
+        return False
+
+    def _extract_score(self, text: str):
+        score_pattern = r'(\d+)\s*[x\-]\s*(\d+)'
+        m = re.search(score_pattern, text, re.IGNORECASE)
+        if m:
+            return f"{m.group(1)} x {m.group(2)}"
+        return None
+
+    async def _handle_partner_result(self, message):
+        try:
+            placar = self._extract_score(message.content or "")
+            db = self.db_session_factory()
+            fila = db.query(Fila).filter_by(canal_id=str(message.channel.id)).order_by(Fila.id.desc()).first()
+            if not fila:
+                db.close()
+                return
+            fila.status = "FINALIZADA"
+            fila.placar_final = placar
+            fila.timestamp_finalizacao = datetime.utcnow()
+            db.commit()
+            janela = int(self.config.get("janela_pagamento_segundos", 120))
+            await AntiDetectionUtils.natural_action(message.channel.send, f"🟢 Partida finalizada ({placar or 'placar não detectado'}). Janela de pagamento aberta por {janela//60} minuto(s).")
+            asyncio.create_task(self._close_payment_window_after(fila.id, janela))
+            db.close()
+        except Exception as e:
+            self.logger.error(f"Erro ao processar resultado parceiro: {e}")
+            traceback.print_exc()
+
+    async def _close_payment_window_after(self, fila_id, seconds):
+        await asyncio.sleep(seconds)
+        try:
+            db = self.db_session_factory()
+            fila = db.query(Fila).filter_by(id=fila_id).first()
+            if fila and fila.status == "FINALIZADA":
+                pagos = db.query(Pagamento).filter_by(client_id=fila.client_id, canal_id=fila.canal_id).count()
+                channel = self.get_channel(int(fila.canal_id)) if fila.canal_id else None
+                if pagos == 0 and channel:
+                    await AntiDetectionUtils.natural_action(channel.send, "⏰ Janela de pagamento encerrada. Para registrar pagamento use: `pg Nome`.")
+            db.close()
+        except Exception:
+            traceback.print_exc()
+
+    # ------------------------
+    # Classificação OCR: comprovante x histórico
+    # ------------------------
+    def _classify_image_text(self, text: str):
+        t = (text or "").lower()
+        pay_keywords = ["pix", "comprovante", "transferência", "transferencia", "valor recebido", "recebido", "pago", "valor"]
+        history_keywords = ["placar", "resultado", "vencedor", "finalizado", "partida encerrada", "gols", "fim de partida", "histórico"]
+        pay_score = sum(1 for k in pay_keywords if k in t)
+        hist_score = sum(1 for k in history_keywords if k in t)
+        if pay_score > hist_score:
+            return "COMPROVANTE"
+        if hist_score > pay_score:
+            return "HISTORICO"
+        return "INDETERMINADO"
+
+    # ------------------------
+    # Processamento principal de mensagens
+    # ------------------------
+    async def on_message(self, message):
+        if message.author == self.user:
+            return
+        try:
+            canal_nome = getattr(message.channel, "name", "DM/privado")
+            conteudo = (message.content or "")[:100]
+            print(f"📨 [MSG] Canal: #{canal_nome} | Autor: {message.author} | Texto: '{conteudo}' | Anexos: {len(message.attachments)}")
+        except Exception as e:
+            print(f"⚠️ [MSG] Erro ao logar mensagem recebida: {e}")
+        asyncio.create_task(self.process_message(message))
+
     async def process_message(self, message):
         try:
-            # ❌ IMPORTANTE: NÃO chamamos rate_limiter aqui!
-            # Antes, o bot aplicava limite de taxa em CADA mensagem RECEBIDA.
-            # Em canais movimentados isso criava uma fila gigante de esperas
-            # ("Rate limit atingido. Esperando Xs") e o bot ficava travado,
-            # sem responder aos comandos. ⛔
-            # Agora o limite de taxa só vale para as ações de ENVIO (responder),
-            # que é o que realmente importa para não ser detectado. ✅
             conteudo = (message.content or "").strip()
-            
-            # Sugestão automática de formato 'pg' quando detectamos variações
+
+            # Sugerir formato 'pg' quando detectamos variações escritas
             try:
                 detected = self._detect_payment_mention(conteudo)
-                # Só sugerimos se não for o comando 'pg ' já correto e se detectamos um nome ou indicador relevante
                 if detected and not conteudo.lower().startswith("pg "):
-                    # Evitar sugerir para mensagens muito longas (provavelmente não é um comprovante)
                     if len(conteudo) < 200:
                         await self._suggest_payment_format(message, detected)
-                        # Não retornamos; permitimos que outras rotinas continuem (ex.: OCR se houver anexo)
             except Exception as e:
                 self.logger.debug(f"Erro ao detectar menção de pagamento: {e}")
 
-            # 💸 PRIORIDADE MÁXIMA: comando manual "pg Nome" (sem precisar de OCR!)
-            # Se alguém escrever, por exemplo, "pg Juan" (com ou sem imagem anexada),
-            # o bot busca o pagamento DIRETO no Gmail pelo nome, ignorando a imagem.
-            # Isso é mais confiável do que ler o print, e funciona mesmo SEM o Tesseract. ✅
+            # Prioridade: comando manual pg
             if conteudo.lower().startswith("pg "):
                 print(f"✅ [CMD] Comando 'pg' detectado de {message.author}: '{conteudo[:60]}'")
                 self._log_to_db("info", f"Comando 'pg' recebido de {message.author}")
                 await self.cmd_pg(message)
-                return # Não processa OCR da imagem quando o comando 'pg' é usado.
+                return
 
-            # 🔎 Detecção de comandos
+            # Comandos existentes
             if conteudo.startswith(f"{self.prefix}criar_sala"):
                 print(f"✅ [CMD] Comando 'criar_sala' detectado de {message.author}")
                 self._log_to_db("info", f"Comando criar_sala recebido de {message.author}")
@@ -300,7 +348,12 @@ class MediacaoBot(discord.Client):
                 self._log_to_db("info", f"Comando verificar_pix recebido de {message.author}")
                 await self.cmd_verificar_pix(message)
 
-            # 🖼️ Verificar se é um comprovante em imagem (print de Pix)
+            # Detectar mensagem do parceiro (resultado/histórico)
+            if self._is_partner_result_msg(message):
+                await self._handle_partner_result(message)
+                # continue — ainda pode haver anexo a tratar
+
+            # Verificar anexos (imagem)
             if message.attachments:
                 print(f"🖼️ [IMG] Mensagem com {len(message.attachments)} anexo(s) — verificando se é comprovante...")
                 await self.check_comprovante_print(message)
@@ -309,8 +362,10 @@ class MediacaoBot(discord.Client):
             print(f"❌ [ERRO] Falha ao processar mensagem: {e}")
             self._log_to_db("error", f"Erro no bot: {str(e)}")
 
+    # ------------------------
+    # Comandos existentes (criar sala / verificar_pix / pg)
+    # ------------------------
     async def cmd_criar_sala(self, message):
-        """!criar_sala @jogador1 @jogador2 valor"""
         args = message.content.split()[1:]
         if len(args) < 3 or len(message.mentions) < 2:
             await AntiDetectionUtils.natural_action(
@@ -318,14 +373,11 @@ class MediacaoBot(discord.Client):
                 "Formato correto: `!criar_sala @jog1 @jog2 valor`"
             )
             return
-        valor = args[-1]
-        # Obter guild
+        valor_text = args[-1]
         guild = message.guild
-        # Encontrar categoria
         category = None
         if self.categoria_id:
             category = guild.get_channel(int(self.categoria_id))
-        # Permissões
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             message.mentions[0]: discord.PermissionOverwrite(read_messages=True, send_messages=True),
@@ -343,19 +395,26 @@ class MediacaoBot(discord.Client):
             category=category,
             overwrites=overwrites
         )
-        # Usar Anti-detecção para enviar a msg
         msg_content = (f"Sala criada! {message.mentions[0].mention} e {message.mentions[1].mention}\n"
-                       f"Valor da partida: R$ **{valor}**.\n"
+                       f"Valor da partida: R$ **{valor_text}**.\n"
                        f"Por favor, enviem o comprovante por print aqui, ou eu posso consultar via `!verificar_pix NOME VALOR` se já foi enviado.")
         await AntiDetectionUtils.natural_action(channel.send, msg_content)
-        # Gravar no BD
+
+        # Salvar no BD com status / tipo / valor_esperado
         try:
             db = self.db_session_factory()
+            try:
+                valor_float = float(str(valor_text).replace(',', '.'))
+            except Exception:
+                valor_float = None
+            tipo_padrao = self.config.get("tipo_partida_padrao", "NORMAL")
             nova_fila = Fila(
                 client_id=self.db_client_id,
                 canal_id=str(channel.id),
                 jogadores=[m.name for m in message.mentions],
-                status="aberta"
+                status="AGUARDANDO_PAGAMENTO",
+                valor_esperado=valor_float,
+                tipo_partida=tipo_padrao
             )
             db.add(nova_fila)
             db.commit()
@@ -365,7 +424,6 @@ class MediacaoBot(discord.Client):
             self.logger.error(f"Erro ao salvar BD fila: {e}")
 
     async def cmd_verificar_pix(self, message):
-        """!verificar_pix Nome Do Jogador Valor"""
         print(f"🔍 [VERIFICAR_PIX] Comando recebido: '{message.content[:100]}'")
         if not self.email or not self.email_senha:
             print(f"⚠️ [VERIFICAR_PIX] E-mail não configurado para este cliente. Abortando.")
@@ -376,7 +434,6 @@ class MediacaoBot(discord.Client):
             print(f"⚠️ [VERIFICAR_PIX] Formato inválido (faltam argumentos).")
             await AntiDetectionUtils.natural_action(message.reply, "Formato: !verificar_pix Nome valor")
             return
-        # Tenta extrair o último termo como valor, e os anteriores como nome
         argumentos = partes[1].split()
         if len(argumentos) < 2:
             print(f"⚠️ [VERIFICAR_PIX] Faltam nome e/ou valor. Abortando.")
@@ -387,7 +444,6 @@ class MediacaoBot(discord.Client):
         await AntiDetectionUtils.natural_action(message.reply, f"Verificando e-mail por Pix de '{nome}' no valor de R${valor}...")
         def run_sync_gmail():
             return GmailService.check_payment_email(self.email, self.email_senha, nome, valor)
-        print(f"🔍 [VERIFICAR_PIX] Iniciando busca no Gmail (em segundo plano)...")
         loop = asyncio.get_event_loop()
         resultado = await loop.run_in_executor(None, run_sync_gmail)
         print(f"✅ [VERIFICAR_PIX] Busca no Gmail concluída. Encontrou pagamento? {'SIM' if resultado else 'NÃO'}")
@@ -407,14 +463,6 @@ class MediacaoBot(discord.Client):
             )
 
     async def cmd_pg(self, message):
-        """Comando manual: "pg Nome do Jogador" (valor é opcional).
-        👉 Exemplos de uso:
-        - "pg Juan" -> busca no Gmail um Pix do "Juan" (qualquer valor)
-        - "pg Juan Silva" -> busca por "Juan Silva"
-        - "pg Juan 10,00" -> busca por "Juan" no valor de R$ 10,00
-        O bot procura o pagamento DIRETO no Gmail, sem precisar ler nenhuma
-        imagem (sem OCR/Tesseract). É a forma mais confiável de confirmar! ✅
-        """
         print(f"🔍 [PG] Comando 'pg' recebido: '{message.content[:100]}'")
         if not self.email or not self.email_senha:
             print(f"⚠️ [PG] E-mail não configurado para este cliente. Abortando.")
@@ -423,7 +471,6 @@ class MediacaoBot(discord.Client):
                 "⚠️ E-mail não configurado. Avise o administrador para configurar o Gmail."
             )
             return
-        # Remove o prefixo "pg " (3 primeiros caracteres) e separa os termos.
         resto = message.content.strip()[3:].strip()
         argumentos = resto.split()
         if not argumentos:
@@ -433,14 +480,12 @@ class MediacaoBot(discord.Client):
                 "📝 Use assim: `pg Nome do Jogador`\nExemplo: `pg Juan`"
             )
             return
-        # Tenta descobrir se o último termo é um VALOR (ex: 10, 10,00, 10.50).
-        # Se for, o nome é tudo menos o último termo. Senão, valor fica vazio.
         valor = None
         ultimo = argumentos[-1].replace("R$", "").replace("r$", "").replace(",", ".").strip()
         if len(argumentos) >= 2:
             try:
                 float(ultimo)
-                valor = argumentos[-1] # mantém o formato original (ex: "10,00")
+                valor = argumentos[-1]
                 nome = " ".join(argumentos[:-1])
             except ValueError:
                 nome = " ".join(argumentos)
@@ -454,7 +499,6 @@ class MediacaoBot(discord.Client):
         )
         def run_sync_gmail():
             return GmailService.check_payment_email(self.email, self.email_senha, nome, valor)
-        print(f"🔍 [PG] Iniciando busca no Gmail (em segundo plano)...")
         loop = asyncio.get_event_loop()
         resultado = await loop.run_in_executor(None, run_sync_gmail)
         print(f"✅ [PG] Busca no Gmail concluída. Encontrou pagamento? {'SIM' if resultado else 'NÃO'}")
@@ -478,29 +522,21 @@ class MediacaoBot(discord.Client):
                 f"Confira se o nome está correto e se o comprovante já chegou no Gmail."
             )
 
+    # ------------------------
+    # OCR / comprovante handling
+    # ------------------------
     async def check_comprovante_print(self, message):
-        """Verifica se a imagem é um comprovante usando OCR.
-        🔍 ESTE MÉTODO TEM LOGS DETALHADOS EM CADA ETAPA para descobrir
-        exatamente onde o processamento trava ou para."""
         try:
             canal_nome = getattr(message.channel, "name", "DM/privado")
             print(f"🔍 [COMPROVANTE] Iniciando análise no canal: #{canal_nome}")
-            # Etapa 1: Verificar se está numa sala "fila-*"
             if not canal_nome.startswith("fila-"):
-                print(f"⏭️ [COMPROVANTE] Canal '#{canal_nome}' NÃO começa com 'fila-'. Ignorando imagem. "
-                      f"(Comprovantes só são analisados em salas que começam com 'fila-'")
+                print(f"⏭️ [COMPROVANTE] Canal '#{canal_nome}' NÃO começa com 'fila-'. Ignorando imagem.")
                 return
-            print(f"✅ [COMPROVANTE] Canal válido (começa com 'fila-').")
-            # Etapa 2: Verificar a extensão da imagem
             image_url = message.attachments[0].url
             print(f"🔗 [COMPROVANTE] URL da imagem: {image_url[:120]}")
             if not image_url.lower().split('?')[0].endswith(('.png', '.jpg', '.jpeg', '.webp')):
-                print(f"⏭️ [COMPROVANTE] O anexo NÃO é uma imagem suportada (.png/.jpg/.jpeg/.webp). Ignorando.")
+                print(f"⏭️ [COMPROVANTE] O anexo NÃO é uma imagem suportada. Ignorando.")
                 return
-            print(f"✅ [COMPROVANTE] Anexo é uma imagem suportada.")
-            # Etapa 2.5: Verificar se o Tesseract (OCR) está disponível neste servidor.
-            # Em ambientes como a Square Cloud, muitas vezes NÃO dá para instalar o
-            # programa 'tesseract'. Nesse caso, avisamos o usuário para usar "pg Nome". ✅
             if not OCRService.tesseract_disponivel():
                 print("⚠️ [COMPROVANTE] Tesseract não disponível, usando modo texto apenas.")
                 self.logger.warning("⚠️ Tesseract não disponível, usando modo texto apenas")
@@ -512,66 +548,97 @@ class MediacaoBot(discord.Client):
                     "Exemplo: `pg Juan` — eu busco o Pix direto no Gmail! 🎉"
                 )
                 return
-            # Etapa 3: Avisar que está analisando
-            print(f"💬 [COMPROVANTE] Enviando mensagem 'Analisando comprovante...'")
-            await AntiDetectionUtils.natural_action(
-                message.reply,
-                "Analisando comprovante..."
-            )
-            print(f"✅ [COMPROVANTE] Mensagem 'Analisando...' enviada.")
-            # Etapa 4: Executar OCR (lê o texto da imagem)
-            print(f"🔍 [COMPROVANTE] Iniciando OCR (leitura do texto da imagem)...")
+            await AntiDetectionUtils.natural_action(message.reply, "Analisando comprovante...")
             text = await OCRService.extract_text_from_image_url(image_url)
             print(f"✅ [COMPROVANTE] OCR concluído. Caracteres extraídos: {len(text) if text else 0}")
-            if text:
-                print(f"📄 [COMPROVANTE] Prévia do texto lido (200 primeiros chars): '{text[:200]}'")
             if not text:
-                print(f"⚠️ [COMPROVANTE] OCR não retornou texto. Avisando o usuário.")
                 await AntiDetectionUtils.natural_action(message.channel.send, "Não consegui ler o comprovante.")
                 return
-            # Etapa 5: Verificar palavras-chave de comprovante
-            texto_min = text.lower()
-            print(f"🔍 [COMPROVANTE] Procurando palavras-chave (comprovante/pix/transferência) no texto...")
-            if "comprovante" in texto_min or "pix" in texto_min or "transferência" in texto_min or "transferencia" in texto_min:
-                print(f"✅ [COMPROVANTE] Palavra-chave ENCONTRADA! Aprovando comprovante.")
-                await AntiDetectionUtils.natural_action(
-                    message.reply,
-                    "✅ Comprovante reconhecido pelo sistema (OCR)!"
-                )
+
+            classification = self._classify_image_text(text)
+            print(f"🔍 [COMPROVANTE] Classificação OCR: {classification}")
+            # Se histórico -> tratar como resultado/parceiro
+            if classification == "HISTORICO":
+                # atualiza fila como finalizada e abre janela
+                await self._handle_partner_result(message)
+                return
+
+            # Se comprovante ou indeterminado, tentar extrair nome/valor do OCR
+            detected = self._detect_payment_mention(text)
+            if detected and detected.get("name"):
+                # tenta salvar com nome detectado
+                nome_detectado = detected.get("name")
+                # tenta extrair valor do texto se houver
+                valor_match = re.search(r'(\d+[.,]\d{1,2})', text)
+                valor_text = valor_match.group(1) if valor_match else "0"
+                await AntiDetectionUtils.natural_action(message.channel.send, "✅ Comprovante reconhecido pelo sistema (OCR)!")
                 self._log_to_db("success", f"Comprovante reconhecido no canal {canal_nome}")
-                print(f"💾 [COMPROVANTE] Salvando pagamento no banco de dados...")
-                self._salvar_pagamento(message.author.name, "0", str(message.channel.id)) # Pode refinar para extrair valor depois
-                print(f"✅ [COMPROVANTE] Pagamento salvo. Processo concluído com sucesso! 🎉")
+                # Tenta salvar pagamento (vai checar ambiguidades)
+                self._salvar_pagamento(nome_detectado, valor_text, str(message.channel.id))
             else:
-                print(f"❌ [COMPROVANTE] Nenhuma palavra-chave de comprovante encontrada no texto lido.")
+                # Não conseguimos extrair nome: pedir para enviar comando pg
                 await AntiDetectionUtils.natural_action(
                     message.channel.send,
-                    "⚠️ Não reconheci este print como um comprovante de Pix."
+                    "⚠️ Não reconheci claramente o nome no comprovante. Por favor, digite `pg Nome Sobrenome` (ex.: `pg João Silva`) para eu confirmar."
                 )
         except Exception as e:
-            # Captura QUALQUER erro inesperado e mostra o traceback completo
             self.logger.error(f"❌ Erro em check_comprovante_print: {str(e)}")
             self.logger.error(f"Traceback: {traceback.format_exc()}")
-            print(f"❌ [COMPROVANTE] ERRO inesperado: {str(e)}")
-            print(traceback.format_exc())
             self._log_to_db("error", f"Erro ao analisar comprovante: {str(e)}")
 
+    # ------------------------
+    # Salvar pagamento com desambiguação
+    # ------------------------
     def _salvar_pagamento(self, nome, valor, canal_id):
         try:
             db = self.db_session_factory()
+            # procurar fila ativa neste canal
+            fila = db.query(Fila).filter_by(canal_id=str(canal_id)).order_by(Fila.id.desc()).first()
+            jogador_associado = None
+            if fila:
+                match = self._find_player_in_fila(fila, nome)
+                if match == "AMBIGUO":
+                    # pedir nome + sobrenome ao autor (não salva)
+                    channel = self.get_channel(int(canal_id))
+                    if channel:
+                        asyncio.create_task(AntiDetectionUtils.natural_action(channel.send, "⚠️ Encontrei mais de um jogador com esse nome. Por favor envie o `pg Nome Sobrenome` para eu registrar corretamente."))
+                    db.close()
+                    return
+                elif match is None:
+                    # não encontrou — pede nome completo
+                    channel = self.get_channel(int(canal_id))
+                    if channel:
+                        asyncio.create_task(AntiDetectionUtils.natural_action(channel.send, "⚠️ Não consegui identificar qual jogador é. Por favor envie `pg Nome Sobrenome` (ex.: `pg João Silva`)."))
+                    db.close()
+                    return
+                else:
+                    jogador_associado = match
+
+            # normalizar valor
             if isinstance(valor, str):
-                valor = valor.replace(',', '.')
+                valor_s = valor.replace(',', '.').strip()
             else:
-                valor = "0.0"
+                valor_s = str(valor)
+            try:
+                valor_float = float(valor_s)
+            except Exception:
+                valor_float = 0.0
+
             pg = Pagamento(
                 client_id=self.db_client_id,
-                nome_pagador=nome,
-                valor=float(valor) if valor else 0.0,
-                horario="Agors",
+                nome_pagador=jogador_associado or nome,
+                valor=float(valor_float) if valor_float else 0.0,
+                horario=datetime.utcnow().isoformat(),
                 canal_id=canal_id
             )
             db.add(pg)
+            # se teve fila e jogador, pode atualizar status se necessário
+            if fila:
+                # marcar registro de que pelo menos um pagamento existe
+                fila.status = "PAGA" if fila.status in ("AGUARDANDO_PAGAMENTO", "FINALIZADA") else fila.status
             db.commit()
             db.close()
+            self._log_to_db("success", f"Pagamento salvo: {pg.nome_pagador} R${pg.valor}")
         except Exception as e:
             self.logger.error(f"Erro salvar pag DB: {e}")
+            traceback.print_exc()
