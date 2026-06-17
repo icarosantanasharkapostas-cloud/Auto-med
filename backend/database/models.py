@@ -1,9 +1,7 @@
 from sqlalchemy import Column, Integer, String, Float, DateTime, Text
 from sqlalchemy.dialects.postgresql import ARRAY
-from sqlalchemy.ext.declarative import declarative_base
+from backend.database.config import Base   # IMPORTAR o Base do projeto (config.py)
 from datetime import datetime
-
-Base = declarative_base()
 
 class Fila(Base):
     __tablename__ = "filas"
@@ -22,5 +20,4 @@ class Fila(Base):
     def __repr__(self):
         return (f"<​Fila id={self.id} canal_id={self.canal_id} "
                 f"status={self.status} tipo={self.tipo_partida} valor_esperado={self.valor_esperado}>")
-
 
