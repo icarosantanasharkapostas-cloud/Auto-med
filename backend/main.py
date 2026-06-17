@@ -1,4 +1,3 @@
-# backend/main.py
 import sys
 import os
 
@@ -10,48 +9,50 @@ from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import text
-from backend.database.config import engine, Base, SessionLocal
+from sqlalchemy import text, create_engine
+from backend.database.config import DATABASE_URL, engine, Base, SessionLocal
 from backend.api.routes import router
 from bot.client_manager import manager
+
+# --- CORREÇÃO DE EMERGÊNCIA (RODA ANTES DE TUDO) ---
+def correcao_preventiva_sqlite():
+    # Conecta diretamente via engine para garantir que as colunas existam ANTES do app carregar os models
+    with engine.connect() as conn:
+        # 1. Colunas para a tabela clients
+        colunas_clients = ["categoria_salas_id", "cargo_mediador_id"]
+        for col in colunas_clients:
+            try:
+                conn.execute(text(f"ALTER TABLE clients ADD COLUMN {col} VARCHAR"))
+                conn.commit()
+                print(f"[DB-FIX] Coluna {col} adicionada em clients.")
+            except Exception:
+                # Se der erro é porque a coluna provavelmente já existe
+                pass
+
+        # 2. Colunas para a tabela filas
+        colunas_filas = {
+            "status": "VARCHAR DEFAULT 'AGUARDANDO_PAGAMENTO'",
+            "tipo_partida": "VARCHAR DEFAULT 'NORMAL'",
+            "valor_esperado": "NUMERIC",
+            "placar_final": "VARCHAR",
+            "timestamp_finalizacao": "TIMESTAMP",
+            "meta": "TEXT"
+        }
+        for col, tipo in colunas_filas.items():
+            try:
+                conn.execute(text(f"ALTER TABLE filas ADD COLUMN {col} {tipo}"))
+                conn.commit()
+                print(f"[DB-FIX] Coluna {col} adicionada em filas.")
+            except Exception:
+                pass
+
+# Executa a correção ANTES de importar os models que causam o erro
+correcao_preventiva_sqlite()
+
+# Agora importamos os models com segurança
 from backend.database.models import Client, Log, Pagamento, Fila, Admin
 
-# --- FUNÇÃO DE ATUALIZAÇÃO ONE-SHOT (Squad Cloud / ambientes sem acesso a psql) ---
-def atualizar_banco_automatico():
-    """
-    Executa ALTER TABLE IF NOT EXISTS para garantir colunas que o frontend pode enviar.
-    One-shot: é seguro executá-lo no startup (usa IF NOT EXISTS) — depois remova o bloco.
-    """
-    db = SessionLocal()
-    try:
-        colunas = [
-            # Colunas para a tabela filas
-            "ALTER TABLE filas ADD COLUMN IF NOT EXISTS status VARCHAR DEFAULT 'AGUARDANDO_PAGAMENTO'",
-            "ALTER TABLE filas ADD COLUMN IF NOT EXISTS tipo_partida VARCHAR DEFAULT 'NORMAL'",
-            "ALTER TABLE filas ADD COLUMN IF NOT EXISTS valor_esperado NUMERIC",
-            "ALTER TABLE filas ADD COLUMN IF NOT EXISTS placar_final VARCHAR",
-            "ALTER TABLE filas ADD COLUMN IF NOT EXISTS timestamp_finalizacao TIMESTAMP",
-            "ALTER TABLE filas ADD COLUMN IF NOT EXISTS meta TEXT",
-            # Colunas adicionais para clients (fields do painel)
-            "ALTER TABLE clients ADD COLUMN IF NOT EXISTS categoria_salas_id VARCHAR",
-            "ALTER TABLE clients ADD COLUMN IF NOT EXISTS cargo_mediador_id VARCHAR",
-            # Caso precise adicionar outras colunas no futuro, inclua aqui
-        ]
-        for sql in colunas:
-            try:
-                db.execute(text(sql))
-                db.commit()
-                print(f"[DB-UPDATE] OK: {sql}")
-            except Exception as e:
-                db.rollback()
-                # Ignora erros esperados (ex.: permissão) mas loga para depuração
-                print(f"[DB-UPDATE] Ignorado/Erro: {sql} -> {e}")
-        print("[DB-UPDATE] verificação concluída.")
-    finally:
-        db.close()
-# -----------------------------------------------------------------------------
-
-# Inicializa banco de dados (Cria tabelas novas se não existirem)
+# Inicializa banco de dados padrão
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Mediação Bot API")
@@ -66,16 +67,11 @@ app.add_middleware(
 
 app.include_router(router, prefix="/api")
 
-# Montar frontend
 app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 templates = Jinja2Templates(directory="frontend/templates")
 
 @app.on_event("startup")
 async def startup_event():
-    # Roda a atualização de colunas (one-shot) no início
-    atualizar_banco_automatico()
-
-    # Inicializar bots marcados como "ativos" no banco
     db = SessionLocal()
     try:
         active_clients = db.query(Client).filter(Client.ativo == True).all()
