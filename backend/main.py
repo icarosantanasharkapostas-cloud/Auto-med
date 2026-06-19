@@ -4,7 +4,6 @@ import os
 import json
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-import asyncio
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -12,37 +11,36 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 from backend.database.config import engine, Base, SessionLocal
 
-# ---------------- CORREÇÃO ONE-SHOT E NORMALIZAÇÃO ----------------
+# ---------------- CORREÇÃO ONE-SHOT (executa ANTES dos models) ----------------
 def correcao_preventiva_total():
     """
-    Garante que colunas esperadas existam no banco (compatível com SQLite e Postgres).
-    Também normaliza config_json vazio para '{}' em clients.
-    Executar ANTES de importar os models para evitar Import/OperationalError.
+    Tenta adicionar colunas faltantes no banco (SQLite/Postgres).
+    Executa antes de importar models para evitar problemas de 'no such column'.
+    Após confirmar que tudo está ok, remova a chamada a essa função.
     """
     try:
         with engine.begin() as conn:
-            # Clients: adiciona colunas se faltarem
+            # CLIENTS
             clients_cols = [
                 ("categoria_salas_id", "TEXT"),
                 ("cargo_mediador_id", "TEXT"),
-                ("criado_em", "TIMESTAMP"),
+                ("criado_em", "TIMESTAMP")
             ]
             for col, coltype in clients_cols:
                 try:
                     conn.execute(text(f"ALTER TABLE clients ADD COLUMN {col} {coltype}"))
                     print(f"[DB-FIX] Tentativa: adicionar clients.{col}")
                 except Exception:
-                    # ignora se já existir / SQLite retornará erro se já existe
                     pass
 
-            # Filas: adiciona colunas que usamos no fluxo
+            # FILAS
             filas_cols = [
                 ("status", "TEXT"),
                 ("tipo_partida", "TEXT"),
                 ("valor_esperado", "NUMERIC"),
                 ("placar_final", "TEXT"),
                 ("timestamp_finalizacao", "TIMESTAMP"),
-                ("meta", "TEXT"),
+                ("meta", "TEXT")
             ]
             for col, coltype in filas_cols:
                 try:
@@ -51,8 +49,9 @@ def correcao_preventiva_total():
                 except Exception:
                     pass
 
-            # Pagamentos: adiciona pagador e meta
+            # PAGAMENTOS (adiciona status, pagador e meta)
             pagamentos_cols = [
+                ("status", "TEXT"),
                 ("pagador", "TEXT"),
                 ("meta", "TEXT")
             ]
@@ -63,28 +62,27 @@ def correcao_preventiva_total():
                 except Exception:
                     pass
 
-            # Normalizar config_json: atualizar valores NULL ou '' para '{}'
+            # Normaliza config_json (para evitar erro de validação no frontend)
             try:
-                # verifica se coluna existe (pragmatic)
                 conn.execute(text("UPDATE clients SET config_json = '{}' WHERE config_json IS NULL OR config_json = ''"))
+                print("[DB-FIX] Normalizou config_json nulo/vazio.")
             except Exception:
-                # Alguns DBs podem ter config_json com tipo JSON e essa UPDATE é válida mesmo assim.
                 pass
 
         print("[DB-FIX] verificação concluída.")
     except Exception as e:
         print(f"[DB-FIX] Erro na correcao_preventiva_total: {e}")
 
-# Executa correção antes de importar models/routers/manager
+# Executa a correção ANTES de importar models/rotas/manager
 correcao_preventiva_total()
-# ---------------- fim correção one-shot ----------------
+# ---------------------------------------------------------------------------
 
-# Agora é seguro importar models/rotas/manager
+# Agora é seguro importar models/routers/manager
 from backend.database.models import Client, Log, Pagamento, Fila, Admin
 from backend.api.routes import router
 from bot.client_manager import manager
 
-# garante criação de tabelas novas (não altera tabelas existentes)
+# Garante criação de tabelas novas (não altera tabelas existentes)
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Mediação Bot API")
@@ -97,11 +95,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Inclua seu router principal
 app.include_router(router, prefix="/api")
 
-# Montar frontend
-app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
+# Templates (ajuste o path se o seu projeto usa outra pasta)
 templates = Jinja2Templates(directory="frontend/templates")
+app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
+
+# (Opcional) Se você adicionou qr_routes conforme instruções anteriores, inclua também:
+# from backend.api.qr_routes import router as qr_router
+# app.include_router(qr_router)
 
 @app.on_event("startup")
 async def startup_event():
@@ -109,7 +112,7 @@ async def startup_event():
     try:
         active_clients = db.query(Client).filter(Client.ativo == True).all()
         for c in active_clients:
-            # garantir que config_json seja dict (pode vir como string de versões antigas)
+            # garantir que config_json seja dict
             cfg = c.config_json
             if isinstance(cfg, str):
                 try:
@@ -118,15 +121,18 @@ async def startup_event():
                     cfg = {}
             if cfg is None:
                 cfg = {}
-            success = await manager.start_client({
-                "id": c.id,
-                "nome": c.nome,
-                "token": c.token,
-                "email": c.email,
-                "senha_email": c.senha_email,
-                "config_json": cfg
-            })
-            print(f"Startup client {c.id} start status: {success}")
+            try:
+                success = await manager.start_client({
+                    "id": c.id,
+                    "nome": c.nome,
+                    "token": c.token,
+                    "email": c.email,
+                    "senha_email": c.senha_email,
+                    "config_json": cfg
+                })
+                print(f"Startup client {c.id} start status: {success}")
+            except Exception as e:
+                print(f"Erro ao iniciar client {c.id}: {e}")
     finally:
         db.close()
 
