@@ -14,57 +14,78 @@ from backend.database.config import engine, Base, SessionLocal
 # ---------------- CORREÇÃO ONE-SHOT (executa ANTES dos models) ----------------
 def correcao_preventiva_total():
     """
-    Tenta adicionar colunas faltantes no banco (SQLite/Postgres).
-    Executa antes de importar models para evitar problemas de 'no such column'.
-    Após confirmar que tudo está ok, remova a chamada a essa função.
+    Garante que TODAS as colunas usadas pelo código existam no banco
+    (SQLite ou PostgreSQL), evitando os erros "no such column".
+
+    ✅ Funciona tanto em banco NOVO (Railway) quanto em banco ANTIGO
+       (que veio da Square Cloud com colunas faltando). É idempotente:
+       se a coluna já existe, apenas ignora.
     """
+    # Descobre se estamos em PostgreSQL para usar o tipo de data correto.
+    is_postgres = engine.url.get_backend_name().startswith("postgres")
+    ts_type = "TIMESTAMP" if is_postgres else "TIMESTAMP"
+
+    # Mapa: tabela -> lista de (coluna, tipo) que PRECISAM existir.
+    colunas_por_tabela = {
+        "clients": [
+            ("categoria_salas_id", "TEXT"),
+            ("cargo_mediador_id", "TEXT"),
+            ("criado_em", ts_type),
+            ("ativo", "BOOLEAN"),
+        ],
+        "admins": [
+            ("username", "TEXT"),
+            ("password_hash", "TEXT"),
+            ("client_id", "INTEGER"),
+            ("discord_id", "TEXT"),
+            ("nome", "TEXT"),
+            ("nivel", "TEXT"),
+            ("ativo", "BOOLEAN"),
+            ("criado_em", ts_type),
+        ],
+        "logs": [
+            ("tipo", "TEXT"),
+            ("client_id", "INTEGER"),
+            ("timestamp", ts_type),
+        ],
+        "pagamentos": [
+            ("nome_pagador", "TEXT"),
+            ("valor", "NUMERIC"),
+            ("horario", "TEXT"),
+            ("canal_id", "TEXT"),
+            ("status", "TEXT"),
+            ("meta", "TEXT"),
+            ("timestamp", ts_type),
+        ],
+        "filas": [
+            ("status", "TEXT"),
+            ("tipo_partida", "TEXT"),
+            ("valor_esperado", "NUMERIC"),
+            ("placar_final", "TEXT"),
+            ("timestamp_finalizacao", ts_type),
+            ("meta", "TEXT"),
+        ],
+    }
+
     try:
         with engine.begin() as conn:
-            # CLIENTS
-            clients_cols = [
-                ("categoria_salas_id", "TEXT"),
-                ("cargo_mediador_id", "TEXT"),
-                ("criado_em", "TIMESTAMP")
-            ]
-            for col, coltype in clients_cols:
-                try:
-                    conn.execute(text(f"ALTER TABLE clients ADD COLUMN {col} {coltype}"))
-                    print(f"[DB-FIX] Tentativa: adicionar clients.{col}")
-                except Exception:
-                    pass
+            for tabela, colunas in colunas_por_tabela.items():
+                for col, coltype in colunas:
+                    try:
+                        conn.execute(text(
+                            f"ALTER TABLE {tabela} ADD COLUMN {col} {coltype}"
+                        ))
+                        print(f"[DB-FIX] Adicionada coluna {tabela}.{col}")
+                    except Exception:
+                        # Coluna já existe ou tabela ainda não criada — tudo bem.
+                        pass
 
-            # FILAS
-            filas_cols = [
-                ("status", "TEXT"),
-                ("tipo_partida", "TEXT"),
-                ("valor_esperado", "NUMERIC"),
-                ("placar_final", "TEXT"),
-                ("timestamp_finalizacao", "TIMESTAMP"),
-                ("meta", "TEXT")
-            ]
-            for col, coltype in filas_cols:
-                try:
-                    conn.execute(text(f"ALTER TABLE filas ADD COLUMN {col} {coltype}"))
-                    print(f"[DB-FIX] Tentativa: adicionar filas.{col}")
-                except Exception:
-                    pass
-
-            # PAGAMENTOS (adiciona status, pagador e meta)
-            pagamentos_cols = [
-                ("status", "TEXT"),
-                ("pagador", "TEXT"),
-                ("meta", "TEXT")
-            ]
-            for col, coltype in pagamentos_cols:
-                try:
-                    conn.execute(text(f"ALTER TABLE pagamentos ADD COLUMN {col} {coltype}"))
-                    print(f"[DB-FIX] Tentativa: adicionar pagamentos.{col}")
-                except Exception:
-                    pass
-
-            # Normaliza config_json (para evitar erro de validação no frontend)
+            # Normaliza config_json nulo/vazio para evitar erro de validação.
             try:
-                conn.execute(text("UPDATE clients SET config_json = '{}' WHERE config_json IS NULL OR config_json = ''"))
+                conn.execute(text(
+                    "UPDATE clients SET config_json = '{}' "
+                    "WHERE config_json IS NULL OR config_json = ''"
+                ))
                 print("[DB-FIX] Normalizou config_json nulo/vazio.")
             except Exception:
                 pass
