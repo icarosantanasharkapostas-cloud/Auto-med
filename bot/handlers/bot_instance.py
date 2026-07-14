@@ -73,7 +73,7 @@ class MediacaoBot(discord.Client):
             print(msg)
             return
         print(f"🔑 [DEBUG] Token recebido (tamanho: {len(token)} caracteres). Conectando...")
-        max_tentativas = 3
+        max_tentativas = 5
         for tentativa in range(1, max_tentativas + 1):
             try:
                 print(f"🔄 [DEBUG] Tentativa {tentativa} de {max_tentativas} de conexão...")
@@ -95,6 +95,25 @@ class MediacaoBot(discord.Client):
                     self._log_to_db("error", erro_final)
                     print(erro_final)
             except Exception as e:
+                # 🚦 Trata o famoso 429 (Too Many Requests) do Discord.
+                #    Com self-bots o Discord às vezes bloqueia o login por
+                #    excesso de tentativas. Nesse caso NÃO adianta reconectar
+                #    rápido: precisamos esperar bastante (backoff crescente).
+                status = getattr(e, "status", None) or getattr(getattr(e, "response", None), "status", None)
+                texto_erro = str(e)
+                eh_rate_limit = (status == 429) or ("429" in texto_erro) or ("Too Many Requests" in texto_erro)
+
+                if eh_rate_limit and tentativa < max_tentativas:
+                    espera = min(300, 30 * tentativa)  # 30s, 60s, 90s... até 5 min
+                    msg = (f"🚦 Discord retornou 429 (Too Many Requests) para "
+                           f"'{self.client_name}'. Aguardando {espera}s antes de "
+                           f"tentar de novo (tentativa {tentativa}/{max_tentativas})...")
+                    self.logger.warning(msg)
+                    self._log_to_db("warning", msg)
+                    print(msg)
+                    await asyncio.sleep(espera)
+                    continue
+
                 erro_final = f"❌ Erro ao iniciar o bot '{self.client_name}': {type(e).__name__}: {e}"
                 self.logger.error(erro_final)
                 self._log_to_db("error", erro_final)
